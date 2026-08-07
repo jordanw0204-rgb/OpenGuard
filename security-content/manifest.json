@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "version": "2026.08.06.1",
+  "published_at": "2026-08-07T00:00:00Z",
+  "files": [
+    {
+      "path": "rules/community.yar",
+      "url": "https://raw.githubusercontent.com/jordanw0204-rgb/OpenGuard/v0.2.0/security-content/rules/community.yar",
+      "sha256": "f5d1795442840b58dbd72157f6fa3ecab0c99f19f45511e53ac009ea5eda1485",
+      "size": 285
+    },
+    {
+      "path": "reputation.json",
+      "url": "https://raw.githubusercontent.com/jordanw0204-rgb/OpenGuard/v0.2.0/security-content/reputation.json",
+      "sha256": "00aaa5e71c13bce35633671497b8d90d384871c8c2b697cd2f62fdaab3781a50",
+      "size": 64
+    }
+  ],
+  "signature": "7FFAvcNFPv0RYtVRYdvgZX0my7Bc+0rqjIl4RDbRFOBKgyIz/lgVGdvOvW4fFCZKzhmWvPX1opwy83PEdIz5Bw=="
+}

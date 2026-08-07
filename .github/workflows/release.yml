@@ -1,0 +1,52 @@
+name: Tagged release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Install pinned build dependency
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -r requirements-build.txt
+
+      - name: Prepare optional Authenticode certificate
+        shell: pwsh
+        env:
+          SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
+        run: |
+          if ($env:SIGNING_CERT_BASE64) {
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\openguard-signing.pfx", [Convert]::FromBase64String($env:SIGNING_CERT_BASE64))
+          }
+
+      - name: Test and build
+        shell: pwsh
+        env:
+          OPENGUARD_SIGN_PFX: ${{ runner.temp }}\openguard-signing.pfx
+          OPENGUARD_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: ./scripts/build.ps1
+
+      - name: Smoke-test packaged CLI
+        shell: pwsh
+        run: ./dist/OpenGuard/OpenGuardCLI.exe doctor --pretty
+
+      - name: Publish GitHub release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME release/*.zip release/*.sha256 --verify-tag --generate-notes

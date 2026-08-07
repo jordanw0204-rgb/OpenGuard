@@ -1,0 +1,132 @@
+<context>
+# Overview
+
+OpenGuard is a fully open-source Windows desktop security monitor and on-demand malware scanner. It gives home users, developers, and incident responders a readable view of running processes, newly observed executables, application-owned TCP/UDP endpoints, scan findings, and security alerts without pretending that a user-mode application can see every kernel or packet event.
+
+The product complements the antivirus already registered with Windows. Version 0.1 uses its own transparent local rules and heuristics and can optionally ask the Windows Antimalware Scan Interface (AMSI) to scan supported file content. It never disables Microsoft Defender or registers itself as the system antivirus.
+
+# Core Features
+
+1. Process inventory and change monitoring
+   - Enumerate processes with Windows Tool Help and process-query APIs.
+   - Display PID, parent PID, executable path, memory, CPU, thread count, signature status, risk score, and reasons.
+   - Persist a privacy-preserving local executable identity based on canonical path and file metadata.
+   - Baseline processes on first run; afterward create an alert when a previously unseen or changed executable appears.
+
+2. Network visibility
+   - Enumerate IPv4/IPv6 TCP and UDP endpoints using GetExtendedTcpTable and GetExtendedUdpTable.
+   - Associate each endpoint with its owning PID and executable.
+   - Clearly label this as endpoint/connection visibility, not packet capture or per-process byte accounting.
+
+3. File and folder scanning
+   - Scan selected files or folders recursively without uploading file contents.
+   - Compute SHA-256, detect known test signatures and user-supplied hashes, inspect scripts for high-risk behaviors, identify suspicious executable placement/naming, evaluate basic PE structure/entropy, and verify Authenticode trust.
+   - Optionally invoke the installed AMSI provider for eligible files. Any cloud use is governed by that installed provider's settings.
+   - Return clean, low-risk, suspicious, malicious, skipped, or error outcomes with human-readable evidence.
+
+4. Safe response and audit history
+   - Persist alerts and scan results in local SQLite storage.
+   - Quarantine only after an explicit user action by moving the selected file into a per-user OpenGuard quarantine directory and recording recovery metadata.
+   - Do not auto-delete, auto-kill processes, disable Defender, install drivers, or intercept traffic in v0.1.
+
+5. Desktop experience
+   - Provide an accessible dark Windows desktop dashboard with Overview, Processes, Network, Scanner, Alerts, and About views.
+   - Keep blocking operating-system and file operations off the UI thread.
+   - Support CLI snapshot and scan modes for automation and diagnostics.
+
+# User Experience
+
+- A first-time user launches OpenGuard and sees a baseline of current activity without hundreds of false "new process" warnings.
+- Dashboard cards summarize processes, network endpoints, unseen executables, and unresolved high-severity alerts.
+- The Processes page explains why an item is scored instead of showing an unexplained red label.
+- The Network page maps current endpoints to apps, protocols, local/remote addresses, ports, and TCP state.
+- The Scanner lets a user select a file or folder, watch progress, and inspect evidence before choosing quarantine.
+- The About page explains coverage, limitations, local data storage, and administrator-only future features.
+</context>
+
+<PRD>
+# Technical Architecture
+
+- Runtime: CPython 3.14 on Windows 10/11, packaged as a standalone x64 executable with the already-supported PyInstaller toolchain.
+- Dependencies: Python standard library only at runtime. This reduces supply-chain surface and enables deterministic local builds.
+- UI: tkinter/ttk with a queue-based boundary between UI and worker threads.
+- Native integration: ctypes wrappers around Toolhelp32, Kernel32, Psapi, IP Helper, WinTrust, and AMSI. All handles must close deterministically, native errors must degrade to "unknown" instead of crashing, and privileged access failures are normal.
+- Storage: per-user SQLite database under %LOCALAPPDATA%\OpenGuard, WAL mode, parameterized queries, and a separate connection per operation/thread.
+- Components:
+  - `windows_api`: Windows process, network, trust, elevation, and AMSI adapters.
+  - `storage`: schema, executable baseline, events, scan history, and quarantine records.
+  - `risk`: explainable risk scoring with conservative thresholds.
+  - `scanner`: streaming hashing, content/rule analysis, optional AMSI, cancellation, and quarantine.
+  - `monitor`: polling coordinator, executable identity tracking, connection mapping, and event generation.
+  - `ui`: presentation only; no direct native calls.
+- Packaging: PyInstaller one-directory release, PowerShell build/archive/checksum script, and Windows GitHub Actions verification.
+
+# Development Roadmap
+
+## Phase 1 — runnable transparent MVP
+
+- Implement all process, endpoint, baseline, risk, scanning, audit, UI, CLI, test, and portable packaging requirements described above.
+- Provide explicit coverage labels and no marketing claim that v0.1 replaces a mature endpoint antivirus.
+
+## Phase 2 — stronger open detection engines
+
+- Add a signed and version-pinned YARA-X sidecar or library adapter with curated, tested rules.
+- Add optional ClamAV/clamd integration with signature freshness, engine health, and license notices.
+- Add signed feed manifests, atomic rule updates, rollback, false-positive suppression, and reproducible rule testing.
+
+## Phase 3 — privileged continuous monitoring
+
+- Add a least-privilege Windows service for durable background monitoring and a versioned authenticated IPC protocol.
+- Replace process polling with ETW SystemTraceProvider process/image events where available.
+- Add ReadDirectoryChangesW/USN-journal coverage and a signed file-system minifilter only if measurable coverage requires it.
+- Add Windows Filtering Platform ALE events for accurate connection telemetry; introduce a Microsoft-signed WFP callout driver only for packet/stream inspection features that cannot safely exist in user mode.
+
+## Phase 4 — production antivirus integration
+
+- Complete independent security review, fuzzing, performance/false-positive benchmarks, update infrastructure, privacy review, and incident-response runbooks.
+- Obtain organizational code-signing and Microsoft Hardware Developer Program requirements before any retail kernel driver.
+- Evaluate Windows Security Center registration and AMSI-provider registration only after the engine meets reliability and coexistence requirements.
+
+# Logical Dependency Chain
+
+1. Establish domain models, storage, and native adapters.
+2. Implement pure risk and scan logic with tests.
+3. Implement monitor orchestration and baseline behavior.
+4. Expose snapshot/scan CLI paths for fast validation.
+5. Build the desktop dashboard on the validated services.
+6. Package and test the portable app.
+7. Add privileged components only after signing, IPC, threat modeling, and failure containment exist.
+
+# Risks and Mitigations
+
+- False positives: conservative score thresholds, evidence strings, first-run baseline, no automatic destructive action, allow-list design in Phase 2.
+- Missed short-lived processes/connections: label polling coverage; migrate to ETW/WFP events in Phase 3.
+- Native API access denied: treat protected processes as expected limited visibility and surface coverage state.
+- Antivirus coexistence: do not register as an antivirus or disable Defender in the MVP; AMSI is consumer-only and optional.
+- Scanner evasion: keep v0.1 claims narrow; add YARA-X/ClamAV adapters and curated feeds rather than inventing opaque "AI" detection.
+- Performance: cache trust decisions, stream hashes, cap content analysis, bound worker queues, and avoid packet capture in the UI process.
+- Driver safety: no test-signed or unsigned production drivers. Retail kernel components require Microsoft signing and an EV-backed organizational process.
+- Privacy: local-first storage, no telemetry, no file upload, and explicit disclosure that the installed AMSI provider controls any provider-side cloud behavior.
+
+# Appendix — Research Decisions (verified 2026-08-06)
+
+- WFP is the supported Windows filtering platform for firewalls, antivirus, IDS, and connection/packet filtering. Deep inspection is a later signed component, while IP Helper owner-PID tables are appropriate for v0.1 connection inventory.
+- ETW supports efficient real-time kernel/application events, but controlling system trace sessions generally requires elevation or delegated Performance Log Users rights.
+- WinVerifyTrust returns success only when the result is exactly zero and is appropriate for Authenticode trust checks.
+- AMSI lets applications submit file, memory, or stream content to an installed antimalware product. Registering an AMSI provider has signing and architecture requirements and is explicitly out of v0.1.
+- Microsoft documents that installing/registering a third-party antivirus can place Defender in passive/disabled modes; OpenGuard v0.1 avoids registration so it remains complementary.
+- Windows requires MSIX packages to be signed and trusted. Local v0.1 deployment is therefore an unsigned portable archive; production MSIX/release signing remains a release-credential task.
+- Retail kernel drivers require Microsoft Hardware Dev Center signing, with EV certificate and program prerequisites. No kernel driver is shipped in v0.1.
+- ClamAV is a useful open-source scanning toolkit but states it is not a traditional endpoint security suite. YARA-X is the preferred future high-performance rule engine, not a justification for claiming full endpoint protection today.
+
+# MVP Acceptance Criteria
+
+- The app starts on Windows without administrator rights and remains responsive while monitoring/scanning.
+- A headless snapshot returns valid JSON containing processes, endpoints, and coverage status.
+- First run baselines current executables without alerts; a subsequently unseen executable can generate an explainable alert.
+- TCP/UDP endpoints are associated with owner PIDs where Windows exposes them.
+- Clean, suspicious-script, EICAR, unreadable, cancelled, and quarantine workflows have automated tests.
+- All native handles/resources are closed; access-denied records do not crash collection.
+- The build script produces a portable application directory, ZIP archive, and SHA-256 checksum.
+- README and UI disclose v0.1 limitations and do not claim complete antivirus replacement.
+</PRD>

@@ -1,0 +1,3 @@
+# Security-sensitive runtime dependencies are deliberately exact-pinned.
+cryptography==50.0.0
+yara-x==1.19.0

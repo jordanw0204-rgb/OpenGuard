@@ -1,0 +1,277 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Establish project foundation",
+        "description": "Create Python package layout, domain models, configuration, licensing, and developer documentation.",
+        "details": "Standard-library-only runtime, typed dataclasses, per-user data paths, and safe defaults.",
+        "testStrategy": "Import smoke tests and configuration unit tests.",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T14:57:23.359Z"
+      },
+      {
+        "id": "2",
+        "title": "Implement local persistence",
+        "description": "Create SQLite schema and repositories for settings, seen executables, events, scan history, and quarantine records.",
+        "details": "Use WAL, parameterized SQL, migrations, and one connection per operation/thread.",
+        "testStrategy": "Temporary-database tests for migration, deduplication, baseline, events, and records.",
+        "status": "done",
+        "dependencies": [
+          "1"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T14:57:23.361Z"
+      },
+      {
+        "id": "3",
+        "title": "Implement Windows native adapters",
+        "description": "Wrap process, memory, CPU, network endpoint, Authenticode, elevation, and AMSI Windows APIs.",
+        "details": "Use ctypes with explicit arg/restypes, deterministic handle cleanup, IPv4/IPv6 owner PID parsing, and graceful access-denied behavior.",
+        "testStrategy": "Windows integration tests plus pure parser/error-path tests.",
+        "status": "done",
+        "dependencies": [
+          "1"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T14:57:23.365Z"
+      },
+      {
+        "id": "4",
+        "title": "Implement explainable risk engine",
+        "description": "Score process and file observations using conservative transparent signals.",
+        "details": "Return bounded scores, severities, and human-readable evidence; distinguish unknown from untrusted.",
+        "testStrategy": "Table-driven tests for system paths, temp executables, LOLBins, signatures, and threshold behavior.",
+        "status": "done",
+        "dependencies": [
+          "1"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T14:57:23.367Z"
+      },
+      {
+        "id": "5",
+        "title": "Implement file scanner and quarantine",
+        "description": "Add streaming SHA-256, signature/content/PE heuristics, optional AMSI, cancellation, recursive scanning, and explicit quarantine.",
+        "details": "Never upload content or auto-delete; record complete evidence and recovery metadata.",
+        "testStrategy": "Tests for clean files, EICAR construction, suspicious scripts, limits, cancellation, errors, and quarantine.",
+        "status": "done",
+        "dependencies": [
+          "2",
+          "3",
+          "4"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T15:12:31.784Z"
+      },
+      {
+        "id": "6",
+        "title": "Implement process and network monitor",
+        "description": "Coordinate snapshots, CPU deltas, executable identity baseline, unseen alerts, risk scoring, and endpoint ownership.",
+        "details": "Use a bounded background polling loop and publish immutable snapshots/events to consumers.",
+        "testStrategy": "Fake-adapter tests for first baseline, later unseen executable, changed metadata, process exits, and endpoint mapping.",
+        "status": "done",
+        "dependencies": [
+          "2",
+          "3",
+          "4"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T15:12:31.788Z"
+      },
+      {
+        "id": "7",
+        "title": "Build desktop dashboard",
+        "description": "Create responsive Overview, Processes, Network, Scanner, Alerts, and About views.",
+        "details": "tkinter/ttk UI consumes services through thread-safe queues; include search/filter, evidence display, progress, cancellation, and explicit quarantine.",
+        "testStrategy": "Controller tests and manual Windows UI smoke checklist.",
+        "status": "done",
+        "dependencies": [
+          "5",
+          "6"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T15:12:31.792Z"
+      },
+      {
+        "id": "8",
+        "title": "Add diagnostic CLI",
+        "description": "Provide JSON headless snapshot and file/folder scan commands for automation.",
+        "details": "Stable exit codes and structured output; UI remains the default mode.",
+        "testStrategy": "Subprocess smoke tests for help, snapshot JSON, clean scan, and detected test file.",
+        "status": "done",
+        "dependencies": [
+          "5",
+          "6"
+        ],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T15:12:31.794Z"
+      },
+      {
+        "id": "9",
+        "title": "Add packaging and CI",
+        "description": "Create PyInstaller configuration, PowerShell release script, archive/checksum generation, and Windows CI.",
+        "details": "Portable unsigned development artifact; document signing requirements and release credential gates.",
+        "testStrategy": "Build executable, launch headless snapshot from dist, run test suite in CI.",
+        "status": "done",
+        "dependencies": [
+          "7",
+          "8"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T15:12:31.797Z"
+      },
+      {
+        "id": "10",
+        "title": "Verify, harden, and document release",
+        "description": "Run full tests, native integration checks, packaged smoke tests, security review checklist, and refresh project indexes.",
+        "details": "Fix failures, document known limitations, update Task Master states, and produce v0.1 artifact/checksum.",
+        "testStrategy": "All unit/integration tests pass and packaged CLI smoke returns valid JSON.",
+        "status": "done",
+        "dependencies": [
+          "9"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T15:14:02.651Z"
+      },
+      {
+        "id": "11",
+        "title": "Integrate YARA-X detection",
+        "description": "Add a pinned YARA-X 1.19.0 Python adapter, bundled rules, explainable match evidence, safe scan limits, and package collection.",
+        "details": "Compile trusted local rules with includes disabled, scan bounded file bytes, expose rule id/metadata, and degrade visibly if the optional engine cannot initialize.",
+        "testStrategy": "Rule compile, marker match, clean miss, malformed rules, timeout/error, scanner integration, and packaged import.",
+        "status": "done",
+        "dependencies": [
+          "5"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T23:50:24.793Z"
+      },
+      {
+        "id": "12",
+        "title": "Add signed security-content updates",
+        "description": "Implement Ed25519-authenticated manifests, SHA-256/size verification, HTTPS-only retrieval, atomic activation, version history, and rollback for YARA rules and local reputation data.",
+        "details": "Canonical JSON signed with a pinned production public key; validate rules/feed before atomic switch and retain last-known-good content.",
+        "testStrategy": "Valid update, bad signature, hash mismatch, insecure URL, invalid rules, interrupted activation, and rollback.",
+        "status": "done",
+        "dependencies": [
+          "11"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-06T23:50:24.803Z"
+      },
+      {
+        "id": "13",
+        "title": "Add quarantine recovery and scan controls",
+        "description": "Implement quarantine listing/restoration, hash allow-listing, path exclusions, and Quick/Full/Startup/Downloads scan profiles in core, CLI, and GUI.",
+        "details": "Preserve explicit consent, collision-safe restores, canonical path matching, cancellation, and audit events.",
+        "testStrategy": "Restore round trip, collision refusal, allow-list/exclusion behavior, profile resolution, CLI/UI controller tests.",
+        "status": "done",
+        "dependencies": [
+          "11"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T00:09:03.051Z"
+      },
+      {
+        "id": "14",
+        "title": "Add DNS and local reputation enrichment",
+        "description": "Resolve remote endpoint PTR names with bounded caching and classify local/public addresses against the signed local reputation feed.",
+        "details": "PTR names are informational only; never treat DNS as identity. Avoid blocking monitor refresh and never upload network data.",
+        "testStrategy": "Cache expiry, resolver failures, IP/CIDR match, private/loopback classification, and monitor integration.",
+        "status": "done",
+        "dependencies": [
+          "12"
+        ],
+        "priority": "medium",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T00:09:03.055Z"
+      },
+      {
+        "id": "15",
+        "title": "Add ETW process events and WFP capability telemetry",
+        "description": "Consume Microsoft-Windows-Kernel-Process ETW start/stop events with a polling fallback, and expose WFP engine/subscription capability state without installing a kernel driver.",
+        "details": "Use documented ETW controller/consumer lifecycle and clean shutdown. Preserve polling where permissions/providers are unavailable; report WFP access precisely.",
+        "testStrategy": "Fake event source, fallback paths, lifecycle cleanup, capability states, and live Windows diagnostic smoke.",
+        "status": "done",
+        "dependencies": [
+          "6"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T00:09:03.058Z"
+      },
+      {
+        "id": "16",
+        "title": "Add background Windows service",
+        "description": "Build an SCM-compatible OpenGuard Monitor service plus install/start/stop/status/uninstall CLI management and shared SQLite event history.",
+        "details": "Use ServiceMain/control handler/status transitions, stop cleanly, quote ImagePath safely, and require elevation for mutations.",
+        "testStrategy": "Service-host unit tests, command construction, packaged service dispatcher smoke, and elevated local install/status/start test.",
+        "status": "done",
+        "dependencies": [
+          "14",
+          "15"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T00:13:37.478Z"
+      },
+      {
+        "id": "17",
+        "title": "Expand desktop and CLI v0.2 surfaces",
+        "description": "Expose engine/update/service health, scan profiles, exclusions, allow-list, quarantine recovery, DNS/reputation, and event-source status.",
+        "details": "Keep background work off the tkinter thread and preserve accessible confirmation flows for destructive actions.",
+        "testStrategy": "Controller/format tests, CLI JSON contract tests, and Playwright-equivalent desktop screenshot/manual UI verification.",
+        "status": "done",
+        "dependencies": [
+          "12",
+          "13",
+          "14",
+          "15",
+          "16"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T00:09:03.062Z"
+      },
+      {
+        "id": "18",
+        "title": "Harden, sign, release, and deploy v0.2",
+        "description": "Update packaging/CI, add conditional Authenticode signing and verification, run full tests/security review, deploy locally, and publish an open-source GitHub release.",
+        "details": "Sign all PE artifacts with SHA-256 and RFC3161 timestamps only when CA-issued credentials are present; never claim unsigned builds are production signed.",
+        "testStrategy": "Unit/integration/UI/package/service smoke, artifact hashes, signature status check, clean secret scan, GitHub Actions/release verification.",
+        "status": "in-progress",
+        "dependencies": [
+          "17"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T00:13:37.517Z"
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2026-08-07T00:13:37.517Z",
+      "taskCount": 18,
+      "completedCount": 17,
+      "tags": [
+        "master"
+      ]
+    }
+  }
+}
