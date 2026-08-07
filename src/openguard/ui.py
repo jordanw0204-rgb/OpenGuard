@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import os
 import queue
 import threading
 import tkinter as tk
@@ -20,20 +22,82 @@ from .windows_api import WindowsNative
 from .yara_engine import YaraEngine
 
 COLORS = {
-    "bg": "#08111f",
-    "sidebar": "#0d1727",
-    "surface": "#111d2f",
-    "surface_alt": "#16243a",
-    "border": "#233451",
-    "text": "#edf4ff",
-    "muted": "#91a3bd",
-    "accent": "#4dd6a8",
-    "accent_dark": "#173f3b",
-    "blue": "#62a7ff",
-    "yellow": "#f4c95d",
-    "orange": "#f28b54",
-    "red": "#ff6577",
+    "bg": "#090a0c",
+    "sidebar": "#0d0f12",
+    "surface": "#121418",
+    "surface_alt": "#191c21",
+    "surface_hover": "#20242a",
+    "border": "#292d34",
+    "border_strong": "#373d46",
+    "text": "#f4f6f8",
+    "muted": "#8e96a1",
+    "muted_strong": "#bac1c9",
+    "accent": "#35e6c0",
+    "accent_hover": "#67efd4",
+    "accent_dark": "#102d29",
+    "selection": "#173d37",
+    "blue": "#79a9ff",
+    "yellow": "#e7c35d",
+    "orange": "#ee9562",
+    "red": "#ff6b7e",
+    "scrollbar_track": "#0e1013",
+    "scrollbar_thumb": "#3a4048",
+    "scrollbar_hover": "#555d68",
 }
+
+NAV_ITEMS = (
+    ("Overview", "\ue80f"),
+    ("Processes", "\ue7c4"),
+    ("Network", "\ue968"),
+    ("Scanner", "\ue721"),
+    ("Security", "\ue83d"),
+    ("Alerts", "\ue7ba"),
+    ("About", "\ue946"),
+)
+
+
+def _asset_path(name: str) -> Path:
+    return Path(__file__).resolve().parent / "assets" / name
+
+
+def _colorref(value: str) -> int:
+    value = value.lstrip("#")
+    red, green, blue = (int(value[index : index + 2], 16) for index in (0, 2, 4))
+    return red | (green << 8) | (blue << 16)
+
+
+def _enable_windows_dark_chrome(root: tk.Tk) -> bool:
+    """Apply supported Windows dark caption attributes without changing window behavior."""
+    if os.name != "nt":
+        return False
+    try:
+        root.update_idletasks()
+        client_hwnd = int(root.winfo_id())
+        parent_hwnd = int(ctypes.windll.user32.GetParent(client_hwnd))
+        handles = tuple(dict.fromkeys(handle for handle in (parent_hwnd, client_hwnd) if handle))
+        dwm = ctypes.windll.dwmapi
+        applied = False
+        for hwnd in handles:
+            enabled = ctypes.c_int(1)
+            result = dwm.DwmSetWindowAttribute(
+                ctypes.c_void_p(hwnd), 20, ctypes.byref(enabled), ctypes.sizeof(enabled)
+            )
+            applied = applied or result == 0
+            for attribute, color in (
+                (34, COLORS["border"]),
+                (35, COLORS["sidebar"]),
+                (36, COLORS["text"]),
+            ):
+                color_value = ctypes.c_uint(_colorref(color))
+                dwm.DwmSetWindowAttribute(
+                    ctypes.c_void_p(hwnd),
+                    attribute,
+                    ctypes.byref(color_value),
+                    ctypes.sizeof(color_value),
+                )
+        return applied
+    except (AttributeError, OSError, tk.TclError, ValueError):
+        return False
 
 
 class OpenGuardUI:
@@ -49,7 +113,7 @@ class OpenGuardUI:
         self.scan_findings: list[ScanFinding] = []
         self.current_page = "Overview"
         self.pages: dict[str, tk.Frame] = {}
-        self.nav_buttons: dict[str, tk.Button] = {}
+        self.nav_widgets: dict[str, tuple[tk.Frame, tk.Frame, tk.Label, tk.Label, tk.Frame]] = {}
         self.metric_values: dict[str, tk.Label] = {}
         self._configure_window()
         self._configure_styles()
@@ -70,6 +134,16 @@ class OpenGuardUI:
         self.root.geometry("1380x860")
         self.root.minsize(1080, 680)
         self.root.configure(bg=COLORS["bg"])
+        self.logo_image: tk.PhotoImage | None = None
+        self.brand_logo: tk.PhotoImage | None = None
+        try:
+            self.logo_image = tk.PhotoImage(file=str(_asset_path("openguard-logo.png")))
+            self.brand_logo = self.logo_image.subsample(4, 4)
+            self.root.iconphoto(True, self.logo_image)
+        except tk.TclError:
+            pass
+        self.root.after(150, lambda: _enable_windows_dark_chrome(self.root))
+        self.root.after(800, lambda: _enable_windows_dark_chrome(self.root))
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self.root)
@@ -79,11 +153,16 @@ class OpenGuardUI:
             background=COLORS["surface"],
             fieldbackground=COLORS["surface"],
             foreground=COLORS["text"],
-            rowheight=30,
+            rowheight=32,
             borderwidth=0,
             font=("Segoe UI", 9),
         )
-        style.map("Treeview", background=[("selected", "#285176")], foreground=[("selected", "white")])
+        style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
+        style.map(
+            "Treeview",
+            background=[("selected", COLORS["selection"])],
+            foreground=[("selected", COLORS["text"])],
+        )
         style.configure(
             "Treeview.Heading",
             background=COLORS["surface_alt"],
@@ -93,6 +172,52 @@ class OpenGuardUI:
             font=("Segoe UI Semibold", 9),
         )
         style.map("Treeview.Heading", background=[("active", COLORS["border"])])
+        style.configure(
+            "OpenGuard.Vertical.TScrollbar",
+            gripcount=0,
+            background=COLORS["scrollbar_thumb"],
+            darkcolor=COLORS["scrollbar_thumb"],
+            lightcolor=COLORS["scrollbar_thumb"],
+            troughcolor=COLORS["scrollbar_track"],
+            bordercolor=COLORS["scrollbar_track"],
+            arrowcolor=COLORS["muted"],
+            relief="flat",
+            borderwidth=0,
+            width=12,
+        )
+        style.layout(
+            "OpenGuard.Vertical.TScrollbar",
+            [("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
+                ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})
+            ]})],
+        )
+        style.map(
+            "OpenGuard.Vertical.TScrollbar",
+            background=[("pressed", COLORS["accent"]), ("active", COLORS["scrollbar_hover"])],
+        )
+        style.configure(
+            "OpenGuard.Horizontal.TScrollbar",
+            gripcount=0,
+            background=COLORS["scrollbar_thumb"],
+            darkcolor=COLORS["scrollbar_thumb"],
+            lightcolor=COLORS["scrollbar_thumb"],
+            troughcolor=COLORS["scrollbar_track"],
+            bordercolor=COLORS["scrollbar_track"],
+            arrowcolor=COLORS["muted"],
+            relief="flat",
+            borderwidth=0,
+            width=12,
+        )
+        style.layout(
+            "OpenGuard.Horizontal.TScrollbar",
+            [("Horizontal.Scrollbar.trough", {"sticky": "ew", "children": [
+                ("Horizontal.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})
+            ]})],
+        )
+        style.map(
+            "OpenGuard.Horizontal.TScrollbar",
+            background=[("pressed", COLORS["accent"]), ("active", COLORS["scrollbar_hover"])],
+        )
         style.configure(
             "OpenGuard.Horizontal.TProgressbar",
             background=COLORS["accent"],
@@ -108,26 +233,67 @@ class OpenGuardUI:
             bordercolor=COLORS["border"],
             lightcolor=COLORS["border"],
             darkcolor=COLORS["border"],
+            selectbackground=COLORS["selection"],
+            selectforeground=COLORS["text"],
+            padding=(8, 5),
         )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", COLORS["surface_alt"])],
+            foreground=[("readonly", COLORS["text"])],
+            background=[("active", COLORS["surface_hover"]), ("readonly", COLORS["surface_alt"])],
+        )
+        style.configure("TNotebook", background=COLORS["bg"], borderwidth=0, tabmargins=(0, 0, 0, 10))
+        style.configure(
+            "TNotebook.Tab",
+            background=COLORS["surface"],
+            foreground=COLORS["muted"],
+            borderwidth=0,
+            padding=(18, 10),
+            font=("Segoe UI Semibold", 9),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", COLORS["accent_dark"]), ("active", COLORS["surface_hover"])],
+            foreground=[("selected", COLORS["accent"]), ("active", COLORS["text"])],
+        )
+        self.root.option_add("*TCombobox*Listbox.background", COLORS["surface_alt"])
+        self.root.option_add("*TCombobox*Listbox.foreground", COLORS["text"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", COLORS["selection"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", COLORS["text"])
 
     def _build_shell(self) -> None:
-        sidebar = tk.Frame(self.root, bg=COLORS["sidebar"], width=232)
+        sidebar = tk.Frame(
+            self.root,
+            bg=COLORS["sidebar"],
+            width=252,
+            highlightbackground=COLORS["border"],
+            highlightthickness=1,
+        )
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
         main = tk.Frame(self.root, bg=COLORS["bg"])
         main.pack(side="left", fill="both", expand=True)
 
         brand = tk.Frame(sidebar, bg=COLORS["sidebar"])
-        brand.pack(fill="x", padx=22, pady=(24, 26))
-        tk.Label(
-            brand,
-            text="◈",
-            bg=COLORS["accent_dark"],
-            fg=COLORS["accent"],
-            font=("Segoe UI Symbol", 20, "bold"),
-            width=2,
-            height=1,
-        ).pack(side="left")
+        brand.pack(fill="x", padx=18, pady=(22, 24))
+        if self.brand_logo is not None:
+            tk.Label(
+                brand,
+                image=self.brand_logo,
+                bg=COLORS["sidebar"],
+                bd=0,
+            ).pack(side="left")
+        else:
+            tk.Label(
+                brand,
+                text="◈",
+                bg=COLORS["accent_dark"],
+                fg=COLORS["accent"],
+                font=("Segoe UI Symbol", 22, "bold"),
+                width=2,
+                height=1,
+            ).pack(side="left")
         brand_text = tk.Frame(brand, bg=COLORS["sidebar"])
         brand_text.pack(side="left", padx=(10, 0))
         tk.Label(
@@ -145,33 +311,8 @@ class OpenGuardUI:
             font=("Segoe UI", 7),
         ).pack(anchor="w")
 
-        for page, symbol in (
-            ("Overview", "⌂"),
-            ("Processes", "▦"),
-            ("Network", "⌁"),
-            ("Scanner", "◎"),
-            ("Security", "◆"),
-            ("Alerts", "△"),
-            ("About", "ⓘ"),
-        ):
-            button = tk.Button(
-                sidebar,
-                text=f"  {symbol}    {page}",
-                command=lambda selected=page: self.show_page(selected),
-                bg=COLORS["sidebar"],
-                fg=COLORS["muted"],
-                activebackground=COLORS["surface_alt"],
-                activeforeground=COLORS["text"],
-                relief="flat",
-                bd=0,
-                anchor="w",
-                padx=18,
-                pady=12,
-                cursor="hand2",
-                font=("Segoe UI Semibold", 10),
-            )
-            button.pack(fill="x", padx=10, pady=2)
-            self.nav_buttons[page] = button
+        for page, symbol in NAV_ITEMS:
+            self._build_nav_item(sidebar, page, symbol)
 
         status_box = tk.Frame(sidebar, bg=COLORS["surface"], highlightbackground=COLORS["border"], highlightthickness=1)
         status_box.pack(side="bottom", fill="x", padx=16, pady=18)
@@ -236,6 +377,62 @@ class OpenGuardUI:
         self._build_alerts()
         self._build_about()
         self.show_page("Overview")
+
+    def _build_nav_item(self, sidebar: tk.Frame, page: str, symbol: str) -> None:
+        row = tk.Frame(sidebar, bg=COLORS["sidebar"], height=54, cursor="hand2")
+        row.pack(fill="x", padx=10, pady=2)
+        row.pack_propagate(False)
+        indicator = tk.Frame(row, bg=COLORS["sidebar"], width=3)
+        indicator.pack(side="left", fill="y", pady=9)
+        icon_tile = tk.Frame(row, bg=COLORS["surface_alt"], width=38, height=38, cursor="hand2")
+        icon_tile.pack(side="left", padx=(9, 12), pady=8)
+        icon_tile.pack_propagate(False)
+        icon = tk.Label(
+            icon_tile,
+            text=symbol,
+            bg=COLORS["surface_alt"],
+            fg=COLORS["muted_strong"],
+            font=("Segoe Fluent Icons", 17),
+            cursor="hand2",
+        )
+        icon.pack(fill="both", expand=True)
+        label = tk.Label(
+            row,
+            text=page,
+            bg=COLORS["sidebar"],
+            fg=COLORS["muted_strong"],
+            font=("Segoe UI Semibold", 10),
+            anchor="w",
+            cursor="hand2",
+        )
+        label.pack(side="left", fill="both", expand=True)
+        self.nav_widgets[page] = (row, icon_tile, icon, label, indicator)
+        for widget in (row, icon_tile, icon, label, indicator):
+            widget.bind("<Button-1>", lambda _event, selected=page: self.show_page(selected))
+            widget.bind("<Enter>", lambda _event, selected=page: self._set_nav_hover(selected, True))
+            widget.bind("<Leave>", lambda _event, selected=page: self._set_nav_hover(selected, False))
+
+    def _set_nav_hover(self, page: str, hovering: bool) -> None:
+        if page == self.current_page:
+            return
+        row, icon_tile, icon, label, indicator = self.nav_widgets[page]
+        row_color = COLORS["surface_alt"] if hovering else COLORS["sidebar"]
+        tile_color = COLORS["surface_hover"] if hovering else COLORS["surface_alt"]
+        row.configure(bg=row_color)
+        label.configure(bg=row_color, fg=COLORS["text"] if hovering else COLORS["muted_strong"])
+        indicator.configure(bg=row_color)
+        icon_tile.configure(bg=tile_color)
+        icon.configure(bg=tile_color, fg=COLORS["text"] if hovering else COLORS["muted_strong"])
+
+    def _set_nav_selected(self, page: str, selected: bool) -> None:
+        row, icon_tile, icon, label, indicator = self.nav_widgets[page]
+        row_color = COLORS["surface_alt"] if selected else COLORS["sidebar"]
+        tile_color = COLORS["accent_dark"] if selected else COLORS["surface_alt"]
+        row.configure(bg=row_color)
+        label.configure(bg=row_color, fg=COLORS["text"] if selected else COLORS["muted_strong"])
+        indicator.configure(bg=COLORS["accent"] if selected else row_color)
+        icon_tile.configure(bg=tile_color)
+        icon.configure(bg=tile_color, fg=COLORS["accent"] if selected else COLORS["muted_strong"])
 
     def _new_page(self, name: str) -> tk.Frame:
         frame = tk.Frame(self.content, bg=COLORS["bg"])
@@ -563,8 +760,18 @@ class OpenGuardUI:
     def _tree(self, parent: tk.Misc, columns: tuple[str, ...], widths: dict[str, int]) -> ttk.Treeview:
         wrapper = tk.Frame(parent, bg=COLORS["surface"])
         tree = ttk.Treeview(wrapper, columns=columns, show="headings", selectmode="extended")
-        scrollbar = ttk.Scrollbar(wrapper, orient="vertical", command=tree.yview)
-        horizontal = ttk.Scrollbar(wrapper, orient="horizontal", command=tree.xview)
+        scrollbar = ttk.Scrollbar(
+            wrapper,
+            orient="vertical",
+            style="OpenGuard.Vertical.TScrollbar",
+            command=tree.yview,
+        )
+        horizontal = ttk.Scrollbar(
+            wrapper,
+            orient="horizontal",
+            style="OpenGuard.Horizontal.TScrollbar",
+            command=tree.xview,
+        )
         tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=horizontal.set)
         tree.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
@@ -604,12 +811,8 @@ class OpenGuardUI:
             "About": "Coverage, privacy, limitations, and the production roadmap",
         }
         self.page_subtitle.configure(text=subtitles[name])
-        for page, button in self.nav_buttons.items():
-            selected = page == name
-            button.configure(
-                bg=COLORS["accent_dark"] if selected else COLORS["sidebar"],
-                fg=COLORS["accent"] if selected else COLORS["muted"],
-            )
+        for page in self.nav_widgets:
+            self._set_nav_selected(page, page == name)
         if name == "Processes":
             self._refresh_processes()
         elif name == "Network":

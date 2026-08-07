@@ -262,13 +262,27 @@
         "priority": "high",
         "subtasks": [],
         "updatedAt": "2026-08-07T00:28:37.955Z"
+      },
+      {
+        "id": "19",
+        "title": "Redesign desktop theme, scrollbars, navigation icons, and branding",
+        "description": "Replace the blue-tinted desktop UI with a black/graphite visual system, custom dark scrollbars and window chrome, larger polished sidebar icons, and a generated OpenGuard logo used in-app and in packaged Windows executables.",
+        "details": "Keep the existing Tkinter architecture and behavior. Add package-safe asset resolution, Windows dark title bar support with graceful fallback, ttk Notebook/Combobox/Treeview/Scrollbar styling, larger nav icon tiles, logo PNG and multi-size ICO, PyInstaller asset/icon flags, UI-focused tests, packaged visual verification, local redeployment, and app launch.",
+        "testStrategy": "Run focused UI/theme unit tests and full suite, build PyInstaller release, verify PE icons/assets, launch packaged GUI, capture and inspect screenshots across pages and scrollable tables, then deploy locally.",
+        "status": "done",
+        "dependencies": [
+          "18"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T02:27:11.482Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-08-07T00:28:37.955Z",
-      "taskCount": 18,
-      "completedCount": 17,
+      "lastModified": "2026-08-07T02:27:11.482Z",
+      "taskCount": 19,
+      "completedCount": 18,
       "tags": [
         "master"
       ]

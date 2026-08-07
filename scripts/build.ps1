@@ -47,6 +47,7 @@ $common = @(
     '--add-data', "$(Join-Path $projectRoot 'src\openguard\data\builtin.yar'):openguard\data",
     '--add-data', "$(Join-Path $projectRoot 'src\openguard\data\reputation.json'):openguard\data",
     '--add-data', "$(Join-Path $projectRoot 'src\openguard\data\update_public_key.txt'):openguard\data",
+    '--add-data', "$(Join-Path $projectRoot 'src\openguard\assets\openguard-logo.png'):openguard\assets",
     '--collect-all', 'yara_x',
     '--collect-all', 'cryptography',
     '--workpath', $buildRoot,
@@ -58,6 +59,7 @@ $guiArgs = $common + @(
     '--onedir',
     '--windowed',
     '--name', 'OpenGuard',
+    '--icon', (Join-Path $projectRoot 'packaging\openguard.ico'),
     '--distpath', $distRoot,
     (Join-Path $projectRoot 'OpenGuard.pyw')
 )
@@ -71,6 +73,7 @@ $cliArgs = $common + @(
     '--onefile',
     '--console',
     '--name', 'OpenGuardCLI',
+    '--icon', (Join-Path $projectRoot 'packaging\openguard.ico'),
     '--distpath', $cliDist,
     (Join-Path $projectRoot 'openguard_cli.py')
 )
@@ -84,6 +87,7 @@ $serviceArgs = $common + @(
     '--onefile',
     '--windowed',
     '--name', 'OpenGuardService',
+    '--icon', (Join-Path $projectRoot 'packaging\openguard.ico'),
     '--distpath', $serviceDist,
     (Join-Path $projectRoot 'openguard_service.py')
 )

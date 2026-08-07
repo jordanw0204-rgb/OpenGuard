@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — 2026-08-06
+
+- Reworked the desktop interface around a near-black graphite design system.
+- Added dark Windows title-bar chrome and cohesive Treeview, Notebook, Combobox, and progress styles.
+- Replaced native ttk scrollbars with compact dark tracks and hover/pressed states.
+- Rebuilt the sidebar with larger Segoe Fluent icon tiles, selection rails, and hover feedback.
+- Added a generated OpenGuard shield logo and multi-resolution Windows executable icon.
+
 ## 0.2.0 — 2026-08-06
 
 - Integrated YARA-X 1.19.0 and exact-pinned cryptography 50.0.0.
