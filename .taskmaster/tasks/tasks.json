@@ -255,18 +255,18 @@
         "description": "Update packaging/CI, add conditional Authenticode signing and verification, run full tests/security review, deploy locally, and publish an open-source GitHub release.",
         "details": "Sign all PE artifacts with SHA-256 and RFC3161 timestamps only when CA-issued credentials are present; never claim unsigned builds are production signed.",
         "testStrategy": "Unit/integration/UI/package/service smoke, artifact hashes, signature status check, clean secret scan, GitHub Actions/release verification.",
-        "status": "in-progress",
+        "status": "review",
         "dependencies": [
           "17"
         ],
         "priority": "high",
         "subtasks": [],
-        "updatedAt": "2026-08-07T00:13:37.517Z"
+        "updatedAt": "2026-08-07T00:28:37.955Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-08-07T00:13:37.517Z",
+      "lastModified": "2026-08-07T00:28:37.955Z",
       "taskCount": 18,
       "completedCount": 17,
       "tags": [
