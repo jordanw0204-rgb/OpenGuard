@@ -510,7 +510,7 @@ class WindowsNative:
 class AmsiScanner:
     """Optional consumer of the antivirus provider already installed in Windows."""
 
-    def __init__(self, application_name: str = "OpenGuard/0.1") -> None:
+    def __init__(self, application_name: str = "OpenGuard/0.2") -> None:
         self.available = False
         self._context = ctypes.c_void_p()
         self._lock = threading.Lock()

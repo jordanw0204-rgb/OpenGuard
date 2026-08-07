@@ -79,8 +79,14 @@ class ScanProfileTests(unittest.TestCase):
             downloads.mkdir()
             desktop.mkdir()
             environment = {"USERPROFILE": str(user)}
-            self.assertEqual(profile_targets(ScanProfile.DOWNLOADS, environ=environment), (downloads,))
-            self.assertEqual(set(profile_targets(ScanProfile.QUICK, environ=environment)), {downloads, desktop})
+            self.assertEqual(
+                profile_targets(ScanProfile.DOWNLOADS, environ=environment),
+                (downloads.resolve(),),
+            )
+            self.assertEqual(
+                set(profile_targets(ScanProfile.QUICK, environ=environment)),
+                {downloads.resolve(), desktop.resolve()},
+            )
 
 
 if __name__ == "__main__":
