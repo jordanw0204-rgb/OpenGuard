@@ -78,6 +78,11 @@ class NetworkEndpoint:
     remote_hostname: str = ""
     reputation: str = "unknown"
     reputation_reason: str = ""
+    bytes_sent: int | None = None
+    bytes_received: int | None = None
+    send_rate_bps: float | None = None
+    receive_rate_bps: float | None = None
+    usage_status: str = "not-applicable"
 
 
 @dataclass(frozen=True, slots=True)

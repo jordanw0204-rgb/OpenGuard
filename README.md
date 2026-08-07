@@ -10,6 +10,7 @@ OpenGuard is an open-source Windows activity monitor and local security scanner.
 - Live Windows process inventory with CPU, memory, executable path, signature status, risk score, and evidence
 - First-run baseline followed by alerts for unseen or changed executables
 - IPv4/IPv6 TCP and UDP endpoints mapped to owner PIDs/apps, asynchronous PTR names, and signed local IP/CIDR reputation
+- Live TCP upload/download rates and observed byte totals through Windows TCP Extended Statistics when the elevated monitor service is active
 - YARA-X 1.19.0, SHA-256, script/filename/path/PE heuristics, known hashes, and optional installed-provider AMSI checks
 - Quick, Full, Startup, and Downloads scan profiles
 - Ed25519-signed rule/reputation updates with SHA-256/size checks, validation, atomic activation, and rollback

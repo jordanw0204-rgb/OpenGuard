@@ -7,12 +7,13 @@ import os
 import queue
 import threading
 import tkinter as tk
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
+from typing import Any
 
 from .config import APP_NAME, DEFAULT_UPDATE_MANIFEST_URL, VERSION, data_root
-from .models import ScanFinding, ScanProfile, ScanVerdict, SecurityEvent, Severity, SystemSnapshot, utc_now
+from .models import NetworkEndpoint, ScanFinding, ScanProfile, ScanVerdict, SecurityEvent, Severity, SystemSnapshot, utc_now
 from .monitor import SystemMonitor
 from .scanner import Scanner
 from .storage import Database
@@ -54,6 +55,22 @@ NAV_ITEMS = (
     ("Alerts", "\ue7ba"),
     ("About", "\ue946"),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class SecurityPageSnapshot:
+    content: dict[str, Any]
+    service: dict[str, Any]
+    yara_status: str
+    yara_error: str
+    etw_status: str
+    etw_detail: str
+    wfp_status: str
+    wfp_detail: str
+    quarantines: tuple[dict[str, Any], ...]
+    exclusions: tuple[dict[str, Any], ...]
+    allowed_hashes: tuple[dict[str, Any], ...]
+    error: str = ""
 
 
 def _asset_path(name: str) -> Path:
@@ -111,6 +128,8 @@ class OpenGuardUI:
         self.scan_cancel = threading.Event()
         self.scan_running = False
         self.scan_findings: list[ScanFinding] = []
+        self.security_refresh_running = False
+        self.security_refresh_pending = False
         self.current_page = "Overview"
         self.pages: dict[str, tk.Frame] = {}
         self.nav_widgets: dict[str, tuple[tk.Frame, tk.Frame, tk.Label, tk.Label, tk.Frame]] = {}
@@ -539,14 +558,45 @@ class OpenGuardUI:
         self.network_search.trace_add("write", lambda *_: self._refresh_network())
         self.network_count_label = tk.Label(tools, text="Waiting for snapshot", bg=COLORS["surface"], fg=COLORS["muted"], font=("Segoe UI", 9))
         self.network_count_label.pack(side="right", padx=14)
-        panel = self._panel(page, "Application-owned network endpoints", "Current sockets—not packet contents or per-process traffic totals")
+        panel = self._panel(
+            page,
+            "Live application network activity",
+            "Actual TCP bytes and rates since tracking began, plus the destination behind each connection",
+        )
         panel.pack(fill="both", expand=True, pady=(14, 0))
         self.network_tree = self._tree(
             panel,
-            ("protocol", "app", "pid", "local", "remote", "hostname", "reputation", "state", "path"),
-            {"protocol": 76, "app": 160, "pid": 62, "local": 190, "remote": 190, "hostname": 210, "reputation": 100, "state": 100, "path": 330},
+            (
+                "app",
+                "pid",
+                "download",
+                "upload",
+                "received",
+                "sent",
+                "destination",
+                "reputation",
+                "protocol",
+                "state",
+                "local",
+                "path",
+            ),
+            {
+                "app": 155,
+                "pid": 62,
+                "download": 90,
+                "upload": 90,
+                "received": 92,
+                "sent": 92,
+                "destination": 310,
+                "reputation": 100,
+                "protocol": 72,
+                "state": 95,
+                "local": 180,
+                "path": 330,
+            },
         )
         self.network_tree.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        self.network_tree.bind("<Double-1>", self._show_network_details)
 
     def _build_scanner(self) -> None:
         page = self._new_page("Scanner")
@@ -694,7 +744,7 @@ class OpenGuardUI:
             "scan profiles, ETW-triggered refreshes, local reputation context, and audit history.\n\n"
             "What it does not claim\n\n"
             "• It does not replace Microsoft Defender or a mature endpoint antivirus.\n"
-            "• It does not inspect every packet, decrypt TLS, or show exact per-app byte totals.\n"
+            "• It does not inspect packet contents, decrypt TLS, or provide UDP byte totals. TCP counters begin when the service enables tracking.\n"
             "• ETW requires administrator/service access; polling remains the safe fallback.\n"
             "• It cannot inspect protected process memory or defend against a local administrator/kernel attacker.\n"
             "• It never disables Defender, adds exclusions, auto-deletes files, or installs a driver.\n\n"
@@ -804,7 +854,7 @@ class OpenGuardUI:
         subtitles = {
             "Overview": "A readable view of security-relevant activity on this PC",
             "Processes": "Running apps, trust checks, resource use, and explainable risk",
-            "Network": "Which apps own current TCP and UDP endpoints",
+            "Network": "Live TCP usage, owning processes, and remote destinations",
             "Scanner": "Inspect local files and folders without OpenGuard uploads",
             "Security": "Manage signed content, quarantine recovery, allow-listing, and exclusions",
             "Alerts": "Review and resolve the local security event history",
@@ -851,6 +901,8 @@ class OpenGuardUI:
                     self._finish_scan(*payload)
                 elif kind == "security_done" and isinstance(payload, tuple):
                     self._finish_security_action(*payload)
+                elif kind == "security_refresh" and isinstance(payload, SecurityPageSnapshot):
+                    self._apply_security_snapshot(payload)
         except queue.Empty:
             pass
         if self.root.winfo_exists():
@@ -935,31 +987,76 @@ class OpenGuardUI:
             return
         needle = self.network_search.get().strip().casefold()
         shown = 0
-        for index, endpoint in enumerate(self.latest_snapshot.endpoints):
+        active_usage = 0
+        self._network_rows: dict[str, NetworkEndpoint] = {}
+        endpoints = sorted(
+            self.latest_snapshot.endpoints,
+            key=lambda item: (
+                -((item.receive_rate_bps or 0.0) + (item.send_rate_bps or 0.0)),
+                item.process_name.casefold(),
+                item.pid,
+            ),
+        )
+        for index, endpoint in enumerate(endpoints):
             local = _endpoint_text(endpoint.local_address, endpoint.local_port)
             remote = _endpoint_text(endpoint.remote_address, endpoint.remote_port)
-            searchable = f"{endpoint.process_name} {endpoint.process_path} {local} {remote} {endpoint.remote_hostname} {endpoint.reputation} {endpoint.pid}".casefold()
+            destination = _destination_text(endpoint)
+            searchable = f"{endpoint.process_name} {endpoint.process_path} {local} {remote} {destination} {endpoint.remote_hostname} {endpoint.reputation} {endpoint.pid}".casefold()
             if needle and needle not in searchable:
                 continue
+            if endpoint.usage_status == "active":
+                active_usage += 1
             self.network_tree.insert(
                 "",
                 "end",
                 iid=f"net-{index}",
                 values=(
-                    endpoint.protocol,
                     endpoint.process_name or "Unknown / exited",
                     endpoint.pid,
-                    local,
-                    remote,
-                    endpoint.remote_hostname,
+                    _format_rate(endpoint.receive_rate_bps, endpoint.usage_status),
+                    _format_rate(endpoint.send_rate_bps, endpoint.usage_status),
+                    _format_optional_bytes(endpoint.bytes_received),
+                    _format_optional_bytes(endpoint.bytes_sent),
+                    destination,
                     endpoint.reputation.title(),
+                    endpoint.protocol,
                     endpoint.state,
+                    local,
                     endpoint.process_path,
                 ),
                 tags=("critical" if endpoint.reputation == "malicious" else "high" if endpoint.reputation == "suspicious" else "info",),
             )
+            self._network_rows[f"net-{index}"] = endpoint
             shown += 1
-        self.network_count_label.configure(text=f"Showing {shown:,} of {len(self.latest_snapshot.endpoints):,}")
+        usage_note = f" • {active_usage:,} TCP connections metered" if active_usage else " • TCP usage warming / service required"
+        self.network_count_label.configure(
+            text=f"Showing {shown:,} of {len(self.latest_snapshot.endpoints):,}{usage_note}"
+        )
+
+    def _show_network_details(self, _: object) -> None:
+        selected = self.network_tree.selection()
+        if not selected:
+            return
+        endpoint = getattr(self, "_network_rows", {}).get(selected[0])
+        if endpoint is None:
+            return
+        messagebox.showinfo(
+            "Network connection details",
+            f"Application: {endpoint.process_name or 'Unknown / exited'} (PID {endpoint.pid})\n"
+            f"Executable: {endpoint.process_path or 'Access limited'}\n\n"
+            f"Destination: {_destination_text(endpoint)}\n"
+            f"Local endpoint: {_endpoint_text(endpoint.local_address, endpoint.local_port)}\n"
+            f"Protocol / state: {endpoint.protocol} / {endpoint.state}\n"
+            f"Reputation: {endpoint.reputation.title()}"
+            f"{(' — ' + endpoint.reputation_reason) if endpoint.reputation_reason else ''}\n\n"
+            f"Download: {_format_rate(endpoint.receive_rate_bps, endpoint.usage_status)} "
+            f"({_format_optional_bytes(endpoint.bytes_received)} observed)\n"
+            f"Upload: {_format_rate(endpoint.send_rate_bps, endpoint.usage_status)} "
+            f"({_format_optional_bytes(endpoint.bytes_sent)} observed)\n\n"
+            "These are connection metadata and TCP byte counters. HTTPS content is encrypted, so this view can "
+            "highlight an unfamiliar destination or upload spike but cannot prove that a session cookie was stolen.",
+            parent=self.root,
+        )
 
     def _refresh_overview_alerts(self) -> None:
         self.overview_alerts.delete(*self.overview_alerts.get_children())
@@ -1211,53 +1308,114 @@ class OpenGuardUI:
     def _refresh_security(self) -> None:
         if not hasattr(self, "security_status_text"):
             return
-        updater = SecurityContentUpdater()
-        content = updater.state()
-        service = service_action("status")
-        monitor = getattr(self, "monitor", None)
-        etw_status = monitor.process_events.status if monitor else "starting"
-        etw_detail = monitor.process_events.detail if monitor else ""
-        wfp_status = monitor.wfp_monitor.status if monitor else "starting"
-        wfp_detail = monitor.wfp_monitor.detail if monitor else ""
-        if service["success"]:
-            etw_status = self.database.get_metadata("service_etw_status", etw_status) or etw_status
-            etw_detail = self.database.get_metadata("service_etw_detail", etw_detail) or etw_detail
-            wfp_status = self.database.get_metadata("service_wfp_status", wfp_status) or wfp_status
-            wfp_detail = self.database.get_metadata("service_wfp_detail", wfp_detail) or wfp_detail
-        status = (
-            f"OpenGuard: {VERSION}\n"
-            f"YARA-X: {self.scanner.yara.status}"
-            f"{(' — ' + self.scanner.yara.error) if self.scanner.yara.error else ''}\n"
-            f"Security content: {content.get('active_version', 'built-in')}"
-            f" (rollback: {content.get('previous_version') or 'none'})\n"
-            f"Background service: {'installed' if service['success'] else 'not installed'}\n"
-            f"ETW process events: {etw_status} {etw_detail}\n"
-            f"WFP net events: {wfp_status} {wfp_detail}\n\n"
-            "OpenGuard never installs WFP filters or a kernel driver in this release. "
-            "When ETW/WFP access is unavailable, the monitor keeps the documented polling/IP Helper fallback."
-        )
-        self._set_text(self.security_status_text, status)
+        if self.security_refresh_running:
+            self.security_refresh_pending = True
+            return
+        self.security_refresh_running = True
+        if not getattr(self, "_security_snapshot_loaded", False):
+            self._set_text(
+                self.security_status_text,
+                "Refreshing protection status…\n\nYou can keep using OpenGuard while this loads.",
+            )
+        threading.Thread(
+            target=self._security_refresh_worker,
+            name="OpenGuardSecurityRefresh",
+            daemon=True,
+        ).start()
 
-        self.security_quarantine_tree.delete(*self.security_quarantine_tree.get_children())
-        for item in self.database.quarantines(active_only=True):
-            self.security_quarantine_tree.insert(
-                "", "end", iid=str(item["id"]),
-                values=(item["id"], str(item["created_at"])[:19], item["original_path"], item["reason"]),
+    def _security_refresh_worker(self) -> None:
+        try:
+            content = SecurityContentUpdater().state()
+            service = service_action("status")
+            monitor = getattr(self, "monitor", None)
+            etw_status = monitor.process_events.status if monitor else "starting"
+            etw_detail = monitor.process_events.detail if monitor else ""
+            wfp_status = monitor.wfp_monitor.status if monitor else "starting"
+            wfp_detail = monitor.wfp_monitor.detail if monitor else ""
+            if service["success"]:
+                etw_status = self.database.get_metadata("service_etw_status", etw_status) or etw_status
+                etw_detail = self.database.get_metadata("service_etw_detail", etw_detail) or etw_detail
+                wfp_status = self.database.get_metadata("service_wfp_status", wfp_status) or wfp_status
+                wfp_detail = self.database.get_metadata("service_wfp_detail", wfp_detail) or wfp_detail
+            snapshot = SecurityPageSnapshot(
+                content=dict(content),
+                service=dict(service),
+                yara_status=self.scanner.yara.status,
+                yara_error=self.scanner.yara.error,
+                etw_status=str(etw_status),
+                etw_detail=str(etw_detail),
+                wfp_status=str(wfp_status),
+                wfp_detail=str(wfp_detail),
+                quarantines=tuple(dict(item) for item in self.database.quarantines(active_only=True)),
+                exclusions=tuple(dict(item) for item in self.database.exclusions()),
+                allowed_hashes=tuple(dict(item) for item in self.database.allowed_hashes()),
             )
-        self._exclusions = self.database.exclusions()
-        self.exclusion_tree.delete(*self.exclusion_tree.get_children())
-        for index, item in enumerate(self._exclusions):
-            self.exclusion_tree.insert(
-                "", "end", iid=f"exclusion-{index}",
-                values=(item["path"], "Yes" if item["recursive"] else "No", str(item["created_at"])[:19]),
+        except Exception as error:
+            snapshot = SecurityPageSnapshot(
+                content={},
+                service={},
+                yara_status="unknown",
+                yara_error="",
+                etw_status="unknown",
+                etw_detail="",
+                wfp_status="unknown",
+                wfp_detail="",
+                quarantines=(),
+                exclusions=(),
+                allowed_hashes=(),
+                error=f"{type(error).__name__}: {error}",
             )
-        self._allowed_hashes = self.database.allowed_hashes()
-        self.allow_tree.delete(*self.allow_tree.get_children())
-        for index, item in enumerate(self._allowed_hashes):
-            self.allow_tree.insert(
-                "", "end", iid=f"allowed-{index}",
-                values=(item["sha256"], item["label"], str(item["created_at"])[:19]),
+        self._post("security_refresh", snapshot)
+
+    def _apply_security_snapshot(self, snapshot: SecurityPageSnapshot) -> None:
+        self.security_refresh_running = False
+        if snapshot.error:
+            self._set_text(
+                self.security_status_text,
+                f"Protection status refresh failed\n\n{snapshot.error}",
             )
+        else:
+            self._security_snapshot_loaded = True
+            content = snapshot.content
+            service = snapshot.service
+            status = (
+                f"OpenGuard: {VERSION}\n"
+                f"YARA-X: {snapshot.yara_status}"
+                f"{(' — ' + snapshot.yara_error) if snapshot.yara_error else ''}\n"
+                f"Security content: {content.get('active_version', 'built-in')}"
+                f" (rollback: {content.get('previous_version') or 'none'})\n"
+                f"Background service: {'installed' if service.get('success') else 'not installed'}\n"
+                f"ETW process events: {snapshot.etw_status} {snapshot.etw_detail}\n"
+                f"WFP net events: {snapshot.wfp_status} {snapshot.wfp_detail}\n\n"
+                "OpenGuard never installs WFP filters or a kernel driver in this release. "
+                "When ETW/WFP access is unavailable, the monitor keeps the documented polling/IP Helper fallback."
+            )
+            self._set_text(self.security_status_text, status)
+
+            self.security_quarantine_tree.delete(*self.security_quarantine_tree.get_children())
+            for item in snapshot.quarantines:
+                self.security_quarantine_tree.insert(
+                    "", "end", iid=str(item["id"]),
+                    values=(item["id"], str(item["created_at"])[:19], item["original_path"], item["reason"]),
+                )
+            self._exclusions = list(snapshot.exclusions)
+            self.exclusion_tree.delete(*self.exclusion_tree.get_children())
+            for index, item in enumerate(self._exclusions):
+                self.exclusion_tree.insert(
+                    "", "end", iid=f"exclusion-{index}",
+                    values=(item["path"], "Yes" if item["recursive"] else "No", str(item["created_at"])[:19]),
+                )
+            self._allowed_hashes = list(snapshot.allowed_hashes)
+            self.allow_tree.delete(*self.allow_tree.get_children())
+            for index, item in enumerate(self._allowed_hashes):
+                self.allow_tree.insert(
+                    "", "end", iid=f"allowed-{index}",
+                    values=(item["sha256"], item["label"], str(item["created_at"])[:19]),
+                )
+
+        if self.security_refresh_pending:
+            self.security_refresh_pending = False
+            self.root.after_idle(self._refresh_security)
 
     def _install_security_update(self) -> None:
         url = simpledialog.askstring(
@@ -1368,6 +1526,25 @@ def _endpoint_text(address: str, port: int) -> str:
     if ":" in address and address != "*":
         return f"[{address}]:{port}" if port else f"[{address}]"
     return f"{address}:{port}" if port else address
+
+
+def _destination_text(endpoint: NetworkEndpoint) -> str:
+    remote = _endpoint_text(endpoint.remote_address, endpoint.remote_port)
+    if endpoint.remote_address == "*":
+        return "Per-datagram destination (UDP)"
+    if endpoint.remote_hostname and endpoint.remote_hostname.casefold() != endpoint.remote_address.casefold():
+        return f"{endpoint.remote_hostname}  •  {remote}"
+    return remote
+
+
+def _format_optional_bytes(value: int | None) -> str:
+    return _format_bytes(value) if value is not None else "—"
+
+
+def _format_rate(value: float | None, status: str) -> str:
+    if value is not None:
+        return f"{_format_bytes(int(value))}/s"
+    return "Warming" if status == "active" else "—"
 
 
 def _format_bytes(value: int) -> str:

@@ -8,7 +8,7 @@ It is not yet a replacement for Microsoft Defender or another mature endpoint su
 
 - Windows process inventory and previously unseen executable alerts
 - Authenticode trust checks and explainable risk scoring
-- IPv4/IPv6 TCP and UDP owner-PID endpoint inventory
+- IPv4/IPv6 TCP and UDP owner-PID endpoint inventory with service-enabled TCP byte totals/rates
 - Local recursive file scanning with SHA-256, transparent rules/heuristics, and optional installed-provider AMSI checks
 - Local SQLite alert/scan history
 - Explicit, recoverable quarantine action

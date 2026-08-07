@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 — 2026-08-06
+
+- Moved Security-page content, service, and database refreshes off the Tk event thread.
+- Coalesced repeated Security refresh requests to prevent duplicate background work.
+- Added supported Windows TCP Extended Statistics collection through the elevated monitor service.
+- Added per-connection upload/download rates, observed byte totals, and combined hostname/IP destinations.
+- Added connection detail explanations and explicit HTTPS/UDP visibility limitations.
+
 ## 0.2.1 — 2026-08-06
 
 - Reworked the desktop interface around a near-black graphite design system.

@@ -276,13 +276,27 @@
         "priority": "high",
         "subtasks": [],
         "updatedAt": "2026-08-07T02:27:11.482Z"
+      },
+      {
+        "id": "20",
+        "title": "Eliminate Security page UI freezes and add live per-process network usage",
+        "description": "Move Security-page status/database/service work off the Tk thread and enrich network endpoints with actual TCP byte totals, live send/receive rates, and clearer destination context.",
+        "details": "Profile the synchronous Security refresh, implement generation-safe background loading and cached rendering, preserve UI responsiveness under repeated navigation, add Windows TCP Extended Statistics via GetPerTcpConnectionEStats/SetPerTcpConnectionEStats with safe fallbacks, calculate rates from monotonic snapshot deltas, display sent/received totals and rates plus hostname/IP/reputation/direction, document UDP and encrypted-payload limitations, and avoid packet interception or TLS decryption claims.",
+        "testStrategy": "Unit-test async Security refresh behavior and stale result handling, ctypes EStats parsing/fallbacks, counter delta/rate calculations and connection identity, run Windows integration/full suites, package, visually inspect Security and Network pages, deploy and reopen.",
+        "status": "done",
+        "dependencies": [
+          "19"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T03:32:13.058Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-08-07T02:27:11.482Z",
-      "taskCount": 19,
-      "completedCount": 18,
+      "lastModified": "2026-08-07T03:32:13.058Z",
+      "taskCount": 20,
+      "completedCount": 19,
       "tags": [
         "master"
       ]

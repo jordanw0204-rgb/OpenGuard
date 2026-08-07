@@ -6,12 +6,27 @@ import tkinter as tk
 import unittest
 from pathlib import Path
 from tkinter import ttk
+from unittest.mock import patch
 
 from support import add_src_to_path
 
 add_src_to_path()
 
 from openguard.ui import COLORS, NAV_ITEMS, OpenGuardUI, _asset_path, _colorref
+
+
+class _FakeText:
+    def __init__(self) -> None:
+        self.value = ""
+
+    def configure(self, **_options: object) -> None:
+        pass
+
+    def delete(self, *_arguments: object) -> None:
+        self.value = ""
+
+    def insert(self, _position: str, value: str) -> None:
+        self.value = value
 
 
 class UIThemeTests(unittest.TestCase):
@@ -42,6 +57,22 @@ class UIThemeTests(unittest.TestCase):
 
     def test_colorref_uses_windows_bgr_layout(self) -> None:
         self.assertEqual(_colorref("#123456"), 0x563412)
+
+    def test_security_refresh_starts_background_worker_without_blocking(self) -> None:
+        ui = OpenGuardUI.__new__(OpenGuardUI)
+        ui.security_status_text = _FakeText()
+        ui.security_refresh_running = False
+        ui.security_refresh_pending = False
+        with patch("openguard.ui.threading.Thread") as thread:
+            ui._refresh_security()
+            self.assertTrue(ui.security_refresh_running)
+            thread.assert_called_once()
+            self.assertEqual(thread.call_args.kwargs["target"], ui._security_refresh_worker)
+            thread.return_value.start.assert_called_once()
+
+            ui._refresh_security()
+            self.assertTrue(ui.security_refresh_pending)
+            thread.assert_called_once()
 
     @unittest.skipUnless(os.name == "nt", "Tk visual styles are verified on Windows")
     def test_custom_scrollbar_styles_remove_native_arrow_buttons(self) -> None:

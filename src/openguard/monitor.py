@@ -116,10 +116,18 @@ class SystemMonitor:
 
             process_map = {process.pid: process for process in updated}
             endpoints = self.endpoint_enricher.enrich(self.native.endpoints(process_map))
+            metered_tcp = sum(endpoint.usage_status == "active" for endpoint in endpoints)
+            warming_tcp = sum(endpoint.usage_status == "warming" for endpoint in endpoints)
             notes = [
-                "Network rows are endpoints, not captured packets or per-process byte totals.",
+                "Network rows show current endpoints; TCP byte totals begin when Windows collection is enabled.",
                 "PTR hostnames are informational; reputation checks use a signed local feed only.",
             ]
+            if metered_tcp:
+                notes.append(f"Live TCP byte accounting is active on {metered_tcp} established connections.")
+            elif warming_tcp:
+                notes.append("TCP byte accounting is warming up; rates appear after the next sample.")
+            else:
+                notes.append("TCP byte accounting requires the elevated OpenGuard Monitor service; UDP rates are not yet available.")
             if self.process_events.running:
                 notes.append("Process starts/stops trigger refreshes through ETW; polling reconciles state and metrics.")
             else:

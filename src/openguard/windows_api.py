@@ -28,6 +28,7 @@ AF_INET = 2
 AF_INET6 = 23
 TCP_TABLE_OWNER_PID_ALL = 5
 UDP_TABLE_OWNER_PID = 1
+TCP_CONNECTION_ESTATS_DATA = 1
 
 TCP_STATES = {
     1: "CLOSED",
@@ -152,6 +153,29 @@ class MIB_UDP6ROW_OWNER_PID(ctypes.Structure):
     ]
 
 
+class TCP_ESTATS_DATA_RW_v0(ctypes.Structure):
+    _fields_ = [("EnableCollection", ctypes.c_ubyte)]
+
+
+class TCP_ESTATS_DATA_ROD_v0(ctypes.Structure):
+    _fields_ = [
+        ("DataBytesOut", ctypes.c_uint64),
+        ("DataSegsOut", ctypes.c_uint64),
+        ("DataBytesIn", ctypes.c_uint64),
+        ("DataSegsIn", ctypes.c_uint64),
+        ("SegsOut", ctypes.c_uint64),
+        ("SegsIn", ctypes.c_uint64),
+        ("SoftErrors", wintypes.ULONG),
+        ("SoftErrorReason", wintypes.ULONG),
+        ("SndUna", wintypes.ULONG),
+        ("SndNxt", wintypes.ULONG),
+        ("SndMax", wintypes.ULONG),
+        ("ThruBytesAcked", ctypes.c_uint64),
+        ("RcvNxt", wintypes.ULONG),
+        ("ThruBytesReceived", ctypes.c_uint64),
+    ]
+
+
 @dataclass(frozen=True, slots=True)
 class AmsiOutcome:
     status: str
@@ -172,7 +196,10 @@ class WindowsNative:
         self._configure_prototypes()
         self._signature_cache: dict[str, SignatureStatus] = {}
         self._cpu_previous: dict[int, tuple[int, float]] = {}
+        self._tcp_previous: dict[tuple[object, ...], tuple[int, int, float]] = {}
+        self._tcp_enable_attempted: set[tuple[object, ...]] = set()
         self._lock = threading.RLock()
+        self._elevated = self.is_elevated()
 
     def _configure_prototypes(self) -> None:
         self.kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
@@ -218,6 +245,35 @@ class WindowsNative:
         self.iphlpapi.GetExtendedTcpTable.restype = wintypes.DWORD
         self.iphlpapi.GetExtendedUdpTable.argtypes = common_table_args
         self.iphlpapi.GetExtendedUdpTable.restype = wintypes.DWORD
+        get_estats_args = [
+            wintypes.LPVOID,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            wintypes.ULONG,
+        ]
+        set_estats_args = [
+            wintypes.LPVOID,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.ULONG,
+            wintypes.ULONG,
+            wintypes.ULONG,
+        ]
+        self.iphlpapi.GetPerTcpConnectionEStats.argtypes = get_estats_args
+        self.iphlpapi.GetPerTcpConnectionEStats.restype = wintypes.ULONG
+        self.iphlpapi.GetPerTcp6ConnectionEStats.argtypes = get_estats_args
+        self.iphlpapi.GetPerTcp6ConnectionEStats.restype = wintypes.ULONG
+        self.iphlpapi.SetPerTcpConnectionEStats.argtypes = set_estats_args
+        self.iphlpapi.SetPerTcpConnectionEStats.restype = wintypes.ULONG
+        self.iphlpapi.SetPerTcp6ConnectionEStats.argtypes = set_estats_args
+        self.iphlpapi.SetPerTcp6ConnectionEStats.restype = wintypes.ULONG
         self.wintrust.WinVerifyTrust.argtypes = [wintypes.HWND, ctypes.POINTER(GUID), wintypes.LPVOID]
         self.wintrust.WinVerifyTrust.restype = wintypes.LONG
         self.shell32.IsUserAnAdmin.argtypes = []
@@ -421,11 +477,22 @@ class WindowsNative:
 
     def endpoints(self, process_map: dict[int, ProcessRecord] | None = None) -> list[NetworkEndpoint]:
         process_map = process_map or {}
+        sampled_at = time.monotonic()
+        active_tcp_keys: set[tuple[object, ...]] = set()
         endpoints: list[NetworkEndpoint] = []
-        endpoints.extend(self._tcp_table(AF_INET, MIB_TCPROW_OWNER_PID, process_map))
-        endpoints.extend(self._tcp_table(AF_INET6, MIB_TCP6ROW_OWNER_PID, process_map))
+        endpoints.extend(
+            self._tcp_table(AF_INET, MIB_TCPROW_OWNER_PID, process_map, sampled_at, active_tcp_keys)
+        )
+        endpoints.extend(
+            self._tcp_table(AF_INET6, MIB_TCP6ROW_OWNER_PID, process_map, sampled_at, active_tcp_keys)
+        )
         endpoints.extend(self._udp_table(AF_INET, MIB_UDPROW_OWNER_PID, process_map))
         endpoints.extend(self._udp_table(AF_INET6, MIB_UDP6ROW_OWNER_PID, process_map))
+        with self._lock:
+            self._tcp_previous = {
+                key: value for key, value in self._tcp_previous.items() if key in active_tcp_keys
+            }
+            self._tcp_enable_attempted.intersection_update(active_tcp_keys)
         return sorted(endpoints, key=lambda item: (item.process_name.casefold(), item.pid, item.protocol))
 
     def _table_buffer(self, function: object, family: int, table_class: int) -> ctypes.Array[ctypes.c_char] | None:
@@ -442,6 +509,8 @@ class WindowsNative:
         family: int,
         row_type: type[ctypes.Structure],
         process_map: dict[int, ProcessRecord],
+        sampled_at: float,
+        active_keys: set[tuple[object, ...]],
     ) -> list[NetworkEndpoint]:
         buffer = self._table_buffer(self.iphlpapi.GetExtendedTcpTable, family, TCP_TABLE_OWNER_PID_ALL)
         if buffer is None:
@@ -457,20 +526,108 @@ class WindowsNative:
                 remote_address = _ipv6(row.ucRemoteAddr, int(row.dwRemoteScopeId))
             pid = int(row.dwOwningPid)
             owner = process_map.get(pid)
+            local_port = _port(row.dwLocalPort)
+            remote_port = _port(row.dwRemotePort)
+            key = (family, local_address, local_port, remote_address, remote_port, pid)
+            active_keys.add(key)
+            sent, received, send_rate, receive_rate, usage_status = self._tcp_usage(
+                row,
+                family,
+                key,
+                sampled_at,
+            )
             results.append(
                 NetworkEndpoint(
                     protocol="TCP6" if family == AF_INET6 else "TCP4",
                     local_address=local_address,
-                    local_port=_port(row.dwLocalPort),
+                    local_port=local_port,
                     remote_address=remote_address,
-                    remote_port=_port(row.dwRemotePort),
+                    remote_port=remote_port,
                     state=TCP_STATES.get(int(row.dwState), f"STATE_{int(row.dwState)}"),
                     pid=pid,
                     process_name=owner.name if owner else "",
                     process_path=owner.path if owner else "",
+                    bytes_sent=sent,
+                    bytes_received=received,
+                    send_rate_bps=send_rate,
+                    receive_rate_bps=receive_rate,
+                    usage_status=usage_status,
                 )
             )
         return results
+
+    def _tcp_usage(
+        self,
+        row: ctypes.Structure,
+        family: int,
+        key: tuple[object, ...],
+        sampled_at: float,
+    ) -> tuple[int | None, int | None, float | None, float | None, str]:
+        if int(row.dwState) != 5:  # MIB_TCP_STATE_ESTAB
+            return None, None, None, None, "not-established"
+        getter = (
+            self.iphlpapi.GetPerTcpConnectionEStats
+            if family == AF_INET
+            else self.iphlpapi.GetPerTcp6ConnectionEStats
+        )
+        setter = (
+            self.iphlpapi.SetPerTcpConnectionEStats
+            if family == AF_INET
+            else self.iphlpapi.SetPerTcp6ConnectionEStats
+        )
+        rw = TCP_ESTATS_DATA_RW_v0()
+        rod = TCP_ESTATS_DATA_ROD_v0()
+        result = int(
+            getter(
+                ctypes.byref(row),
+                TCP_CONNECTION_ESTATS_DATA,
+                ctypes.byref(rw),
+                0,
+                ctypes.sizeof(rw),
+                None,
+                0,
+                0,
+                ctypes.byref(rod),
+                0,
+                ctypes.sizeof(rod),
+            )
+        )
+        if result != 0:
+            return None, None, None, None, f"unavailable-{result}"
+        if not rw.EnableCollection:
+            if not self._elevated:
+                return None, None, None, None, "service-required"
+            with self._lock:
+                already_attempted = key in self._tcp_enable_attempted
+                self._tcp_enable_attempted.add(key)
+            if not already_attempted:
+                enable = TCP_ESTATS_DATA_RW_v0(1)
+                enable_result = int(
+                    setter(
+                        ctypes.byref(row),
+                        TCP_CONNECTION_ESTATS_DATA,
+                        ctypes.byref(enable),
+                        0,
+                        ctypes.sizeof(enable),
+                        0,
+                    )
+                )
+                if enable_result != 0:
+                    return None, None, None, None, f"unavailable-{enable_result}"
+            return None, None, None, None, "warming"
+
+        sent = int(rod.DataBytesOut)
+        received = int(rod.DataBytesIn)
+        with self._lock:
+            previous = self._tcp_previous.get(key)
+            self._tcp_previous[key] = (sent, received, sampled_at)
+        if previous is None:
+            return sent, received, None, None, "active"
+        previous_sent, previous_received, previous_at = previous
+        elapsed = max(sampled_at - previous_at, 0.000001)
+        send_rate = _counter_rate(sent, previous_sent, elapsed)
+        receive_rate = _counter_rate(received, previous_received, elapsed)
+        return sent, received, send_rate, receive_rate, "active"
 
     def _udp_table(
         self,
@@ -599,6 +756,12 @@ def _rows_from_buffer(
 
 def _port(value: int) -> int:
     return socket.ntohs(int(value) & 0xFFFF)
+
+
+def _counter_rate(current: int, previous: int, elapsed: float) -> float:
+    if current < previous:
+        return 0.0
+    return max((current - previous) / max(elapsed, 0.000001), 0.0)
 
 
 def _ipv4(value: int) -> str:

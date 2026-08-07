@@ -10,7 +10,7 @@
 
 ## Runtime flow
 
-The LocalSystem service runs the monitor while the desktop app is closed. A small native helper controls a private real-time `Microsoft-Windows-Kernel-Process` ETW session; process start/stop events trigger immediate refreshes while bounded polling reconciles state and supplies CPU/network metrics. A read-only WFP net-event subscription reports capability/activity without adding filters. IP Helper remains the endpoint inventory source.
+The LocalSystem service runs the monitor while the desktop app is closed. A small native helper controls a private real-time `Microsoft-Windows-Kernel-Process` ETW session; process start/stop events trigger immediate refreshes while bounded polling reconciles state and supplies CPU/network metrics. A read-only WFP net-event subscription reports capability/activity without adding filters. IP Helper remains the endpoint inventory source, and the elevated service enables supported TCP Extended Statistics collection for real per-connection byte counters.
 
 The scanner runs on a worker, streams SHA-256, limits in-memory inspection, and combines transparent heuristics, YARA-X, Authenticode, and the installed AMSI provider. Security-content manifests are authenticated with a pinned Ed25519 public key; every content file is size/hash checked and validated in staging before an atomic version switch.
 
@@ -19,7 +19,7 @@ SQLite uses WAL mode and one connection per operation. The database, logs, and q
 ## Windows API choices
 
 - Tool Help + process query APIs provide a robust unprivileged inventory, with protected processes represented as limited records.
-- `GetExtendedTcpTable` and `GetExtendedUdpTable` expose current owner-PID endpoints. They do not provide packet contents or accurate per-process byte rates.
+- `GetExtendedTcpTable` and `GetExtendedUdpTable` expose current owner-PID endpoints. `GetPerTcpConnectionEStats` supplies observed TCP byte totals after the LocalSystem service enables collection; the desktop app computes rates from monotonic deltas. UDP byte rates and encrypted packet contents remain unavailable.
 - `WinVerifyTrust` checks Authenticode policy. Only a return value of zero is trusted; unsigned, invalid, and offline-revocation cases remain distinct from an application allow-list.
 - `StartTraceW`, `EnableTraceEx2`, `OpenTraceW`, and `ProcessTrace` consume kernel process events from the elevated service. Failure is visible and falls back to polling.
 - `FwpmEngineOpen0` and `FwpmNetEventSubscribe0` create a read-only net-event subscription. OpenGuard installs no WFP filter or callout.
