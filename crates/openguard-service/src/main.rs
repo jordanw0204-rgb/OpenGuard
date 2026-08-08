@@ -2041,16 +2041,26 @@ mod tests {
         let ResponseData::ScanStarted { scan_id } = *data else {
             panic!("expected scan started response")
         };
-        for _ in 0..100 {
+        wait_for_scan(state, client, &scan_id, "scan completed before timeout")
+    }
+
+    fn wait_for_scan(
+        state: &ServiceState,
+        client: &ClientContext,
+        scan_id: &str,
+        timeout_message: &str,
+    ) -> ScanJobStatus {
+        let deadline = Instant::now() + std::time::Duration::from_secs(15);
+        loop {
             let status = state
-                .scan_status(&scan_id, &client.sid)
+                .scan_status(scan_id, &client.sid)
                 .expect("scan status");
             if !matches!(status.state, ScanJobState::Queued | ScanJobState::Running) {
                 return status;
             }
+            assert!(Instant::now() < deadline, "{timeout_message}");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        panic!("scan completed before timeout")
     }
 
     #[test]
@@ -2118,18 +2128,7 @@ mod tests {
             panic!("expected scan started response")
         };
 
-        let mut completed = None;
-        for _ in 0..100 {
-            let status = state
-                .scan_status(&scan_id, &client.sid)
-                .expect("scan status");
-            if !matches!(status.state, ScanJobState::Queued | ScanJobState::Running) {
-                completed = Some(status);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let status = completed.expect("scan completed before timeout");
+        let status = wait_for_scan(&state, &client, &scan_id, "scan completed before timeout");
         assert_eq!(status.state, ScanJobState::Completed);
         assert_eq!(status.finding.expect("finding").score, 0);
     }
@@ -2234,18 +2233,7 @@ mod tests {
         let ResponseData::ScanStarted { scan_id } = *data else {
             panic!("expected scan started response")
         };
-        let mut completed = None;
-        for _ in 0..100 {
-            let status = state
-                .scan_status(&scan_id, &client.sid)
-                .expect("scan status");
-            if !matches!(status.state, ScanJobState::Queued | ScanJobState::Running) {
-                completed = Some(status);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let status = completed.expect("folder scan completed");
+        let status = wait_for_scan(&state, &client, &scan_id, "folder scan completed");
         assert_eq!(status.state, ScanJobState::Completed);
         assert_eq!(status.files_scanned, 2);
         assert_eq!(status.total_files, 2);
