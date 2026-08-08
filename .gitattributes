@@ -1,0 +1,5 @@
+# Security-content signatures bind the exact bytes. Keep signed text assets on
+# LF even on Windows so include_bytes!, local validation, and CI see one payload.
+security-content/manifest.json text eol=lf
+security-content/reputation.json text eol=lf
+security-content/rules/*.yar text eol=lf
