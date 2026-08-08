@@ -1728,12 +1728,13 @@ fn unix_timestamp() -> String {
 }
 
 fn normalized_path_key(path: &Path) -> String {
-    let display = path.display().to_string().replace('/', "\\");
-    display
-        .strip_prefix(r"\\?\")
-        .unwrap_or(&display)
-        .trim_end_matches('\\')
-        .to_ascii_lowercase()
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let display = resolved.display().to_string().replace('/', "\\");
+    let display = display.strip_prefix(r"\\?\UNC\").map_or_else(
+        || display.strip_prefix(r"\\?\").unwrap_or(&display).to_owned(),
+        |unc| format!(r"\\{unc}"),
+    );
+    display.trim_end_matches('\\').to_ascii_lowercase()
 }
 
 fn apply_behavior_correlations(snapshot: &mut SystemSnapshot) -> usize {
@@ -2007,6 +2008,15 @@ mod tests {
 
     fn test_client() -> ClientContext {
         ClientContext::test_user("S-1-5-21-test-user")
+    }
+
+    #[test]
+    fn path_keys_canonicalize_alias_components_before_policy_matching() {
+        let directory = TempDir::new().expect("temporary directory");
+        let target = directory.path().join("target.txt");
+        std::fs::write(&target, b"test").expect("test target");
+        let alias = directory.path().join(".").join("target.txt");
+        assert_eq!(normalized_path_key(&target), normalized_path_key(&alias));
     }
 
     fn scan_and_wait(
