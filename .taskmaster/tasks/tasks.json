@@ -428,7 +428,7 @@
         "description": "Complete elevated deployment; add process investigation details, parent/child and persistence context, behavioral correlations, installer/signing hardening, adversarial validation, and publish the release.",
         "details": "Extend native snapshot/contracts/UI without regressing stable live tables; expose explainable non-destructive investigation evidence; validate false positives; produce an installer and signed artifacts when credentials exist; deploy and publish through authenticated existing tooling.",
         "testStrategy": "Rust unit/integration tests, C# Release build, UI Automation, package content and signature verification, elevated service/network/ETW smoke, adversarial fixtures, installer smoke, repository secret scan, GitHub release verification.",
-        "status": "in-progress",
+        "status": "done",
         "dependencies": [
           "23"
         ],
@@ -515,23 +515,23 @@
             "title": "Publish source and release",
             "description": "Commit and push the milestone and publish verified artifacts through GitHub.",
             "details": "",
-            "status": "in-progress",
+            "status": "done",
             "dependencies": [
               6
             ],
             "parentTaskId": 24,
             "parentId": "undefined",
-            "updatedAt": "2026-08-08T07:10:03.055Z"
+            "updatedAt": "2026-08-08T08:08:55.252Z"
           }
         ],
-        "updatedAt": "2026-08-08T07:10:03.055Z"
+        "updatedAt": "2026-08-08T08:08:55.252Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-08-08T07:10:03.055Z",
+      "lastModified": "2026-08-08T08:08:55.253Z",
       "taskCount": 24,
-      "completedCount": 21,
+      "completedCount": 22,
       "tags": [
         "master"
       ]
