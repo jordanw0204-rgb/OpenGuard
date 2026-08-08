@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page x:Class="OpenGuard.App.Pages.SettingsPage"
+      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+      xmlns:vm="using:OpenGuard.App.ViewModels"
+      Background="{StaticResource OpenGuardBackgroundBrush}"
+      Loaded="OnLoaded">
+    <ScrollViewer>
+        <Grid Padding="34,30,34,44" RowSpacing="20" MaxWidth="960" HorizontalAlignment="Left">
+            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+            <StackPanel Spacing="5">
+                <TextBlock Text="Settings" Style="{StaticResource PageTitleStyle}" />
+                <TextBlock Text="Protection, privacy, content, exclusions, and service health remain explicit and reviewable." Style="{StaticResource MutedTextStyle}" />
+            </StackPanel>
+            <Border Grid.Row="1" Style="{StaticResource PanelCardStyle}">
+                <StackPanel Spacing="18">
+                    <TextBlock Text="Protection" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid>
+                        <StackPanel><TextBlock Text="Background sensor" FontWeight="SemiBold" /><TextBlock Text="ETW/WFP coverage stays active in service mode; inventories refresh when requested." Style="{StaticResource MutedTextStyle}" /></StackPanel>
+                        <ToggleSwitch HorizontalAlignment="Right" IsOn="True" IsEnabled="False" />
+                    </Grid>
+                    <Rectangle Height="1" Fill="{StaticResource OpenGuardBorderBrush}" />
+                    <Grid>
+                        <StackPanel><TextBlock Text="AMSI second opinion" FontWeight="SemiBold" /><TextBlock Text="Ask the antimalware provider already installed on this PC." Style="{StaticResource MutedTextStyle}" /></StackPanel>
+                        <ToggleSwitch HorizontalAlignment="Right" IsOn="True" IsEnabled="False" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+            <Border Grid.Row="2" Style="{StaticResource PanelCardStyle}">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Security content" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid>
+                        <StackPanel><TextBlock Text="{x:Bind ViewModel.ContentVersion, Mode=OneWay}" FontWeight="SemiBold" /><TextBlock Text="{x:Bind ViewModel.ContentSource, Mode=OneWay}" Style="{StaticResource MutedTextStyle}" /></StackPanel>
+                        <ProgressRing HorizontalAlignment="Right" IsActive="{x:Bind ViewModel.IsBusy, Mode=OneWay}" Width="22" Height="22" VerticalAlignment="Center" />
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button Content="Install signed update" Command="{x:Bind ViewModel.InstallContentUpdateCommand}" IsEnabled="{x:Bind ViewModel.CanManageContent, Mode=OneWay}" />
+                        <Button Content="Roll back" Command="{x:Bind ViewModel.RollbackContentUpdateCommand}" IsEnabled="{x:Bind ViewModel.CanRollback, Mode=OneWay}" />
+                    </StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Style="{StaticResource MutedTextStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Row="3" Style="{StaticResource PanelCardStyle}">
+                <StackPanel Spacing="18">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Protection policy" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="These rules apply only to your Windows account and are enforced by the authenticated native service." Style="{StaticResource MutedTextStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <StackPanel Spacing="3">
+                            <TextBlock Text="Path exclusions" FontWeight="SemiBold" />
+                            <TextBlock Text="Excluded files are recorded as skipped and never silently hidden." Style="{StaticResource MutedTextStyle}" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Add folder" Click="OnAddExclusion" VerticalAlignment="Center" />
+                    </Grid>
+                    <ListView ItemsSource="{x:Bind ViewModel.Exclusions, Mode=OneWay}" SelectionMode="None" MaxHeight="220">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ExclusionItemViewModel">
+                                <Grid Padding="2,8" ColumnSpacing="14">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{x:Bind Path}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{x:Bind Scope}" Style="{StaticResource MutedTextStyle}" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Remove" Tag="{x:Bind Path}" Click="OnRemoveExclusion" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <Rectangle Height="1" Fill="{StaticResource OpenGuardBorderBrush}" />
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Exact SHA-256 allow-list" FontWeight="SemiBold" />
+                        <TextBlock Text="Use only after independently reviewing a file. A changed file gets a different hash and is scanned normally." Style="{StaticResource MutedTextStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Grid ColumnSpacing="10">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBox x:Name="HashInput" PlaceholderText="64-character SHA-256" />
+                        <TextBox x:Name="HashLabelInput" Grid.Column="1" PlaceholderText="Review note" />
+                        <Button Grid.Column="2" Content="Allow hash" Click="OnAddAllowedHash" />
+                    </Grid>
+                    <ListView ItemsSource="{x:Bind ViewModel.AllowedHashes, Mode=OneWay}" SelectionMode="None" MaxHeight="220">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AllowedHashItemViewModel">
+                                <Grid Padding="2,8" ColumnSpacing="14">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{x:Bind Label}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{x:Bind Sha256}" FontFamily="Cascadia Mono" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Remove" Tag="{x:Bind Sha256}" Click="OnRemoveAllowedHash" VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBlock Text="{x:Bind ViewModel.PolicyStatusText, Mode=OneWay}" Style="{StaticResource MutedTextStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Row="4" Style="{StaticResource PanelCardStyle}">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="Privacy" Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="OpenGuard stores security state locally. It has no telemetry or file-upload client. DNS names are informational and encrypted network payloads are not decrypted." Style="{StaticResource MutedTextStyle}" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </ScrollViewer>
+</Page>

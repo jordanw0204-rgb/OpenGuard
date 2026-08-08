@@ -1,0 +1,1 @@
+{"protocol":1,"request_id":"fixture-1","body":{"status":"success","data":{"type":"pong","value":{"service_version":"0.3.0"}}}}

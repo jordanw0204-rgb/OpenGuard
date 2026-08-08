@@ -290,13 +290,248 @@
         "priority": "high",
         "subtasks": [],
         "updatedAt": "2026-08-07T03:32:13.058Z"
+      },
+      {
+        "id": "21",
+        "title": "Migrate OpenGuard to a fully native scalable v0.3 architecture",
+        "description": "Replace all Python production, test, packaging, and UI paths with a Rust native engine/service/CLI, C# WinUI desktop client, versioned authenticated local IPC, and new non-shield graphite branding while preserving and improving v0.2 behavior.",
+        "details": "Architecture: Rust workspace for domain, persistence, detection, Windows telemetry, service and CLI; C# WinUI 3 MVVM desktop UI runs unprivileged; versioned length-prefixed JSON over ACL-restricted named pipes; service owns SQLite and privileged operations; C++/WDK reserved for separately signed minifilter/WFP drivers. Remove Python sources/dependencies only after parity tests. Produce self-contained Windows x64 artifacts, CI, docs, benchmarks, visual evidence, local install and release.",
+        "testStrategy": "Rust and .NET unit tests, migration/contract tests, live Windows integration tests, service/IPC ACL tests, EICAR/YARA/AMSI tests, performance budgets, UI automation/screenshots, packaged smoke tests, installed hash verification, and zero-Python release audit.",
+        "status": "done",
+        "dependencies": [
+          "20"
+        ],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Lock native architecture and parity contract",
+            "description": "Document ADR, threat model, module boundaries, IPC security, performance budgets, migration order, and exhaustive v0.2 parity matrix.",
+            "details": "Architecture and acceptance criteria are reviewed against current Microsoft Windows App SDK, WDK, ETW, WFP, minifilter, named-pipe, and signing guidance.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 21,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-07T11:07:18.648Z"
+          },
+          {
+            "id": 2,
+            "title": "Build Rust workspace and shared foundations",
+            "description": "Implement versioned domain models, configuration, result/error semantics, strict IPC envelopes, storage ownership boundary, tracing, and cross-language schema fixtures.",
+            "details": "cargo fmt/clippy/test; schema golden tests; bounded decode/fuzz smoke; no unsafe code outside isolated Windows FFI modules.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 21,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-07T11:07:18.654Z"
+          },
+          {
+            "id": 3,
+            "title": "Port detection, storage, quarantine, updates and scan profiles",
+            "description": "Port SQLite migrations/repositories, hashing/heuristics, YARA-X, AMSI integration, signed content updates, exclusions, allow-list and recoverable quarantine.",
+            "details": "Parity/golden tests for every existing scanner/storage/update behavior plus cancellation, malformed input, races, and rollback.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 21,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-07T13:45:15.056Z"
+          },
+          {
+            "id": 4,
+            "title": "Port Windows monitoring and service",
+            "description": "Implement Rust Windows service, process/network collection, TCP EStats, DNS/reputation, Authenticode, ETW/WFP telemetry, event persistence, and ACL-restricted named-pipe server.",
+            "details": "Live Windows service tests, access-denied fallbacks, leak/soak tests, IPC authorization tests, and metric parity.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 21,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-07T13:45:15.068Z"
+          },
+          {
+            "id": 5,
+            "title": "Port CLI and management workflows",
+            "description": "Replace Python CLI with native Rust diagnostics, scan, quarantine, update, doctor and SCM management commands.",
+            "details": "JSON contract tests, exit-code tests, packaged CLI/service lifecycle smoke, and backwards-compatible command coverage.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 21,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-07T13:45:15.072Z"
+          },
+          {
+            "id": 6,
+            "title": "Create the new WinUI 3 UX",
+            "description": "Build a C# WinUI 3 MVVM app with responsive dashboard, process/network investigation, scanner, detections, quarantine and settings using virtualized data and background IPC.",
+            "details": "View-model tests, accessibility/keyboard checks, navigation latency budgets, repeated refresh stress, and automated screenshots for all primary views.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 21,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-07T13:45:15.077Z"
+          },
+          {
+            "id": 7,
+            "title": "Regenerate and integrate non-shield branding",
+            "description": "Generate a clean non-shield OpenGuard mark, derive deterministic PNG/ICO/MSIX assets, and apply a black/graphite design system throughout UI and packaging.",
+            "details": "Inspect source and rendered assets, validate alpha/icon sizes, check dark/light contrast policy, and visually verify installed executables and window chrome.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 21,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-07T11:35:04.596Z"
+          },
+          {
+            "id": 8,
+            "title": "Remove Python, harden, package, deploy and release",
+            "description": "Delete Python production/tests/build dependencies after parity, migrate CI/build/signing, run full security/performance/visual audits, deploy locally, open the app, and publish the native release.",
+            "details": "No .py/.pyw/pyproject/PyInstaller/runtime Python in source or artifacts; clean builds; hashes/signatures; tests and benchmarks pass; installed service/UI/CLI verified; GitHub CI/release green.",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 21,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-07T13:45:15.089Z"
+          }
+        ],
+        "updatedAt": "2026-08-07T13:45:15.089Z"
+      },
+      {
+        "id": "22",
+        "title": "Stabilize live activity tables and add interactive telemetry graphs",
+        "description": "Update WinUI process/network pages to reconcile live rows in place, preserve selection and scroll state, expose click-to-sort column headers, render bounded process and network activity histories, and provide safe process context actions.",
+        "details": "Use keyed ObservableCollection reconciliation instead of Clear/repopulate; stable sort with explicit direction and default process CPU/network total activity; reusable native WinUI graph control; context actions include open file location, copy path/details, scan, and web search without termination or destructive operations; deploy updated native package.",
+        "testStrategy": "Build WinUI with zero warnings, run Rust regression gates, exercise sort/filter/reconciliation and context commands, automate navigation and screenshots, smoke installed LocalSystem service and verify the deployed executable hash.",
+        "status": "review",
+        "dependencies": [
+          "21"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T15:30:30.136Z"
+      },
+      {
+        "id": "23",
+        "title": "Eliminate process-table reranking churn and UI lag",
+        "description": "Profile the recorded process-page refresh behavior, keep live values without continuously reranking rows, reduce UI-thread collection/render work, verify stable selection/scroll, and redeploy the optimized WinUI build.",
+        "details": "Decouple live metric updates from explicit sorting; preserve deterministic membership and selection; coalesce graph redraws; measure refresh/navigation responsiveness against the installed service; retain manual click-to-sort behavior and accurate graph history.",
+        "testStrategy": "Analyze recording frames, build WinUI with zero warnings, regression-test Rust service, automate process-list selection/scroll stability across repeated snapshots, measure UI CPU/responsiveness, capture installed screenshots, package and deploy.",
+        "status": "done",
+        "dependencies": [
+          "22"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-07T15:55:38.307Z"
+      },
+      {
+        "id": "24",
+        "title": "Ship privileged investigation and behavioral protection milestone",
+        "description": "Complete elevated deployment; add process investigation details, parent/child and persistence context, behavioral correlations, installer/signing hardening, adversarial validation, and publish the release.",
+        "details": "Extend native snapshot/contracts/UI without regressing stable live tables; expose explainable non-destructive investigation evidence; validate false positives; produce an installer and signed artifacts when credentials exist; deploy and publish through authenticated existing tooling.",
+        "testStrategy": "Rust unit/integration tests, C# Release build, UI Automation, package content and signature verification, elevated service/network/ETW smoke, adversarial fixtures, installer smoke, repository secret scan, GitHub release verification.",
+        "status": "in-progress",
+        "dependencies": [
+          "23"
+        ],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Audit architecture and release prerequisites",
+            "description": "Inspect native/UI data flow, deployment state, GitHub auth, signing certificates, and installer tooling.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 24,
+            "updatedAt": "2026-08-08T06:52:06.788Z",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Build process investigation experience",
+            "description": "Expose native process metadata and add an accessible WinUI investigation dialog/panel.",
+            "details": "",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "parentTaskId": 24,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T06:52:06.792Z"
+          },
+          {
+            "id": 3,
+            "title": "Add behavioral correlation and persistence evidence",
+            "description": "Add explainable rules and startup persistence context with false-positive safeguards.",
+            "details": "",
+            "status": "done",
+            "dependencies": [
+              2
+            ],
+            "parentTaskId": 24,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T06:52:06.795Z"
+          },
+          {
+            "id": 4,
+            "title": "Create hardened installer and signing gates",
+            "description": "Build MSI packaging, conditional Authenticode signing, and signature/package verification.",
+            "details": "",
+            "status": "done",
+            "dependencies": [
+              3
+            ],
+            "parentTaskId": 24,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T06:55:42.836Z"
+          },
+          {
+            "id": 5,
+            "title": "Run adversarial and regression validation",
+            "description": "Run native, UI, installer, signature, and false-positive test suites.",
+            "details": "",
+            "status": "done",
+            "dependencies": [
+              4
+            ],
+            "parentTaskId": 24,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T07:10:03.021Z"
+          },
+          {
+            "id": 6,
+            "title": "Deploy privileged release",
+            "description": "Install the service/helper with elevation and verify full process/network telemetry.",
+            "details": "",
+            "status": "done",
+            "dependencies": [
+              5
+            ],
+            "parentTaskId": 24,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T07:10:03.024Z"
+          },
+          {
+            "id": 7,
+            "title": "Publish source and release",
+            "description": "Commit and push the milestone and publish verified artifacts through GitHub.",
+            "details": "",
+            "status": "in-progress",
+            "dependencies": [
+              6
+            ],
+            "parentTaskId": 24,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T07:10:03.055Z"
+          }
+        ],
+        "updatedAt": "2026-08-08T07:10:03.055Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-08-07T03:32:13.058Z",
-      "taskCount": 20,
-      "completedCount": 19,
+      "lastModified": "2026-08-08T07:10:03.055Z",
+      "taskCount": 24,
+      "completedCount": 21,
       "tags": [
         "master"
       ]

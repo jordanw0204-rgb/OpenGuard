@@ -8,6 +8,10 @@ dev-debug.log
 
 # Dependency directories
 node_modules/
+.tools/
+/target/
+/apps/**/bin/
+/apps/**/obj/
 
 # Environment variables
 .env
@@ -25,20 +29,10 @@ node_modules/
 # OS specific
 .DS_Store
 
-# Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.coverage
-htmlcov/
-.venv/
-venv/
-
 # OpenGuard build and local state
 build/
 dist/
 release/
-*.spec.bak
 *.obj
 .codex/project-overview/
 .taskmaster/config.json

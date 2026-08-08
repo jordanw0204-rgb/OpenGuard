@@ -26,6 +26,14 @@ It is not yet a replacement for Microsoft Defender or another mature endpoint su
 - Automatic LocalSystem background service and management CLI
 - Conditional Authenticode signing/verification and GitHub release automation
 
+## Completed v0.3–v0.4 native investigation milestone
+
+- Stable, virtualized process and network tables with click-to-sort columns and rolling activity graphs
+- In-app process investigation for SHA-256, signer/identity, parent/children, connections, persistence, and evidence
+- Explainable cross-signal behavior correlation with explicit false-positive guardrails
+- Per-machine MSI deployment of the WinUI console and automatic LocalSystem telemetry service
+- Release verification for native-only payloads, checksums, Authenticode status, and administrative MSI extraction
+
 ## Current security architecture
 
 ```text
@@ -41,7 +49,7 @@ Toolhelp + IP Helper + WinTrust + YARA-X
 Windows service -> native ETW process events + read-only WFP net events
 ```
 
-## Release gates beyond v0.2
+## Remaining release gates
 
 1. Obtain and protect a CA-issued Authenticode certificate; build public releases only through the signing workflow.
 2. Independent security review, parser fuzzing, false-positive corpus, performance budgets, and update-key rotation drills.

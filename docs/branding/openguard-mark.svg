@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">OpenGuard telemetry mark</title>
+  <desc id="description">Three open graphite data planes with a cyan local-signal point.</desc>
+  <path fill="#77808C" d="M42 68 112 28 144 48 74 88Z"/>
+  <path fill="#4B535E" d="M42 121 146 62 178 82 74 141Z"/>
+  <path fill="#252B32" d="M78 178 182 119 214 139 110 198Z"/>
+  <circle cx="202.5" cy="83.5" r="7.5" fill="#62E7F2"/>
+</svg>

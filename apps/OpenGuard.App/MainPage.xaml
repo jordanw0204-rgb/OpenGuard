@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="OpenGuard.App.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:pages="using:OpenGuard.App.Pages"
+    Background="{StaticResource OpenGuardBackgroundBrush}">
+
+    <NavigationView
+        x:Name="Navigation"
+        IsBackButtonVisible="Collapsed"
+        IsSettingsVisible="False"
+        IsPaneToggleButtonVisible="True"
+        PaneDisplayMode="Left"
+        OpenPaneLength="246"
+        CompactPaneLength="76"
+        SelectionChanged="OnSelectionChanged">
+        <NavigationView.PaneHeader>
+            <StackPanel Margin="8,12,8,16" Spacing="5">
+                <TextBlock Text="INVESTIGATE" FontSize="10" CharacterSpacing="160" Foreground="{StaticResource OpenGuardMutedBrush}" />
+                <TextBlock Text="{x:Bind ViewModel.ServiceStatus, Mode=OneWay}" FontSize="12" Foreground="{StaticResource OpenGuardMutedBrush}" TextWrapping="Wrap" />
+            </StackPanel>
+        </NavigationView.PaneHeader>
+        <NavigationView.MenuItems>
+            <NavigationViewItem Content="Overview" Tag="overview">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE80F;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="Processes" Tag="processes">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE9F9;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="Network" Tag="network">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE774;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="Scanner" Tag="scanner">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE721;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="Detections" Tag="detections">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE7BA;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="Quarantine" Tag="quarantine">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE8A7;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+        </NavigationView.MenuItems>
+        <NavigationView.FooterMenuItems>
+            <NavigationViewItem Content="Settings" Tag="settings">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE713;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+        </NavigationView.FooterMenuItems>
+        <Frame x:Name="ContentFrame" />
+    </NavigationView>
+</Page>

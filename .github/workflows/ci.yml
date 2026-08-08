@@ -1,4 +1,4 @@
-name: Windows CI
+name: Windows native CI
 
 on:
   push:
@@ -12,43 +12,40 @@ permissions:
 jobs:
   test-and-package:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Check out source
         uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
         with:
-          python-version: '3.14'
+          dotnet-version: 10.0.x
 
-      - name: Install pinned build dependency
-        shell: pwsh
-        run: python -m pip install --disable-pip-version-check -r requirements-build.txt
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
+      - name: Build and test native release
         shell: pwsh
-        run: python -m unittest discover -s tests -v
+        run: ./scripts/build.ps1
 
-      - name: Check native API health
+      - name: Verify packaged native executables
         shell: pwsh
-        run: python openguard_cli.py doctor --pretty
-
-      - name: Build portable release
-        shell: pwsh
-        run: ./scripts/build.ps1 -SkipTests
-
-      - name: Smoke-test packaged CLI
-        shell: pwsh
-        run: ./dist/OpenGuard/OpenGuardCLI.exe doctor --pretty
+        run: |
+          $required = 'OpenGuard.exe','OpenGuardCLI.exe','OpenGuardService.exe','OpenGuardScanner.exe','OpenGuardETW.exe'
+          foreach ($name in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path 'dist\OpenGuard' $name))) { throw "Missing $name" }
+          }
+          $python = Get-ChildItem -LiteralPath 'dist\OpenGuard' -Recurse -File | Where-Object { $_.Extension -in '.py','.pyw','.pyc','.pyd' -or $_.Name -match 'python|pyinstaller' }
+          if ($python) { throw "Python artifacts found: $($python.FullName -join ', ')" }
+          ./dist/OpenGuard/OpenGuardCLI.exe protocol-fixture --pretty
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
         with:
           name: OpenGuard-win-x64
           path: |
-            release/*.zip
-            release/*.sha256
+            release/*
           if-no-files-found: error
           retention-days: 14

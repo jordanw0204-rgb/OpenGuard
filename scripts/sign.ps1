@@ -8,13 +8,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $certificate = (Resolve-Path -LiteralPath $CertificatePath).Path
-$signTool = Get-ChildItem -LiteralPath 'C:\Program Files (x86)\Windows Kits\10\bin' `
-    -Filter signtool.exe -Recurse -ErrorAction Stop |
+$projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+$signTool = @(
+    Get-ChildItem -LiteralPath 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue
+    Get-ChildItem -LiteralPath (Join-Path $projectRoot '.tools\nuget\microsoft.windows.sdk.buildtools') -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue
+) |
     Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
     Sort-Object FullName -Descending |
     Select-Object -First 1
 if (-not $signTool) {
-    throw 'SignTool x64 was not found in the Windows SDK.'
+    throw 'SignTool x64 was not found in the Windows SDK or restored SDK BuildTools package.'
 }
 foreach ($file in $Files) {
     $resolved = (Resolve-Path -LiteralPath $file).Path

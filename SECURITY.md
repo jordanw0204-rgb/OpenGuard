@@ -16,8 +16,8 @@ Do not open a public issue containing exploit details, malware samples, credenti
 
 ## Security-content signing
 
-Update manifests use a pinned Ed25519 public key. Release maintainers keep the matching private key outside the repository and provide it to `scripts/build_content_manifest.py` through `OPENGUARD_UPDATE_PRIVATE_KEY`. A content version is activated only after the signature, declared sizes, SHA-256 hashes, YARA compilation, and reputation schema all validate. Report a suspected signing-key compromise immediately.
+Update manifests use a pinned Ed25519 public key. Release maintainers keep the matching private key outside the repository and provide it to the native manifest-signing utility through `OPENGUARD_UPDATE_PRIVATE_KEY`. A content version is activated only after the signature, declared sizes, SHA-256 hashes, YARA compilation, and reputation schema all validate. Report a suspected signing-key compromise immediately.
 
 ## Current security boundaries
 
-Version 0.2 has an optional LocalSystem service for ETW/WFP access, but it cannot inspect protected process memory, decrypt TLS, or resist a local administrator/kernel attacker. ETW and WFP events improve timing and context; they are not packet capture. Findings are evidence for investigation, not a guarantee of safety.
+Version 0.4 uses a LocalSystem service for supported ETW, WFP, and TCP statistics access, but it cannot inspect protected process memory, decrypt TLS, or resist a local administrator/kernel attacker. ETW and WFP events improve timing and context; they are not packet capture. Behavior correlations combine local observations and remain explainable heuristics, not proof of compromise. Findings are evidence for investigation, not a guarantee of safety.

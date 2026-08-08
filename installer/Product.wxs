@@ -1,0 +1,79 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="OpenGuard"
+      Manufacturer="OpenGuard contributors"
+      Version="$(Version)"
+      UpgradeCode="{F3DE22BA-A28C-4D93-946D-75B8BF4E9D22}"
+      Language="1033"
+      Scope="perMachine"
+      InstallerVersion="500"
+      Compressed="yes">
+    <SummaryInformation Description="OpenGuard native Windows security console" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of OpenGuard is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="OpenGuard" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="OpenGuardProgramMenu" Name="OpenGuard" />
+    </StandardDirectory>
+
+    <Component Id="OpenGuardApplication" Directory="INSTALLFOLDER" Guid="*">
+      <File Id="OpenGuardExe" Source="$(PayloadDirectory)\OpenGuard.exe" KeyPath="yes">
+        <Shortcut
+            Id="OpenGuardStartMenuShortcut"
+            Directory="OpenGuardProgramMenu"
+            Name="OpenGuard"
+            Description="OpenGuard security console"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="OpenGuardIcon"
+            Advertise="no" />
+      </File>
+    </Component>
+
+    <Component Id="OpenGuardServiceComponent" Directory="INSTALLFOLDER" Guid="*">
+      <File Id="OpenGuardServiceExe" Source="$(PayloadDirectory)\OpenGuardService.exe" KeyPath="yes" />
+      <ServiceInstall
+          Id="OpenGuardServiceInstall"
+          Name="OpenGuardNative"
+          DisplayName="OpenGuard Native Security Service"
+          Description="Collects local process and network security telemetry for OpenGuard."
+          Type="ownProcess"
+          Start="auto"
+          ErrorControl="normal"
+          Account="LocalSystem"
+          Vital="yes" />
+      <ServiceControl
+          Id="OpenGuardServiceControl"
+          Name="OpenGuardNative"
+          Start="install"
+          Stop="both"
+          Remove="uninstall"
+          Wait="yes" />
+    </Component>
+
+    <Component Id="OpenGuardProgramMenuComponent" Directory="OpenGuardProgramMenu" Guid="*">
+      <RemoveFolder Id="RemoveOpenGuardProgramMenu" On="uninstall" />
+      <RegistryValue
+          Root="HKLM"
+          Key="Software\OpenGuard"
+          Name="InstalledVersion"
+          Type="string"
+          Value="$(Version)"
+          KeyPath="yes" />
+    </Component>
+
+    <Icon Id="OpenGuardIcon" SourceFile="$(PayloadDirectory)\Assets\AppIcon.ico" />
+
+    <Feature Id="OpenGuardFeature" Title="OpenGuard" Level="1">
+      <ComponentRef Id="OpenGuardApplication" />
+      <ComponentRef Id="OpenGuardServiceComponent" />
+      <ComponentRef Id="OpenGuardProgramMenuComponent" />
+      <Files Directory="INSTALLFOLDER" Include="$(PayloadDirectory)\**">
+        <Exclude Files="$(PayloadDirectory)\OpenGuard.exe" />
+        <Exclude Files="$(PayloadDirectory)\OpenGuardService.exe" />
+      </Files>
+    </Feature>
+  </Package>
+</Wix>

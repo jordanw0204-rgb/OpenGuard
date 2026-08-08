@@ -1,0 +1,46 @@
+[package]
+name = "openguard-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "OpenGuardService"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+hex.workspace = true
+openguard-domain.workspace = true
+openguard-detection.workspace = true
+openguard-ipc.workspace = true
+openguard-storage.workspace = true
+openguard-updates = { path = "../openguard-updates" }
+openguard-windows = { path = "../openguard-windows" }
+serde_json.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
+windows-service.workspace = true
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[dev-dependencies]
+tempfile.workspace = true

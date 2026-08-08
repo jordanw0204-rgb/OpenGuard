@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/openguard-domain",
+    "crates/openguard-ipc",
+    "crates/openguard-storage",
+    "crates/openguard-detection",
+    "crates/openguard-windows",
+    "crates/openguard-service",
+    "crates/openguard-updates",
+    "crates/openguard-scanner",
+    "crates/openguard-cli",
+]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+repository = "https://github.com/jordanw0204-rgb/OpenGuard"
+authors = ["OpenGuard contributors"]
+
+[workspace.dependencies]
+anyhow = "1.0.100"
+base64 = "0.23.1"
+clap = { version = "4.5.54", features = ["derive"] }
+ed25519-dalek = { version = "3.0.0", default-features = false, features = ["fast", "zeroize"] }
+hex = "0.4.3"
+openguard-domain = { path = "crates/openguard-domain" }
+openguard-detection = { path = "crates/openguard-detection" }
+openguard-ipc = { path = "crates/openguard-ipc" }
+openguard-storage = { path = "crates/openguard-storage" }
+rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+tempfile = "3.24.0"
+thiserror = "2.0.17"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["fmt", "json", "env-filter"] }
+ureq = { version = "3.3.0", default-features = false, features = ["rustls", "gzip"] }
+url = "2.5.7"
+uuid = { version = "1.19.0", features = ["v4", "serde"] }
+windows = { version = "0.62.2", default-features = false }
+windows-service = "0.8.1"
+yara-x = { version = "1.19.0", default-features = false, features = ["constant-folding", "exact-atoms", "fast-regexp"] }
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+overflow-checks = true
+panic = "abort"
+strip = "symbols"

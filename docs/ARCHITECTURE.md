@@ -1,66 +1,50 @@
 # Architecture and threat model
 
-## Design principles
-
-- Local-first: no telemetry and no file-upload path.
-- Explainable: every non-clean score includes concrete evidence.
-- Safe failure: access denied and malformed files become explicit limited/error results, not crashes or implicit trust.
-- Non-destructive by default: no process termination, auto-delete, Defender changes, or driver installation.
-- Least privilege: the desktop MVP works without elevation and labels reduced coverage.
+OpenGuard 0.3 is a native, local-first Windows security companion. A Rust service owns security state and collection, a WinUI 3 client renders bounded snapshots over a versioned local pipe, and a small C++ helper consumes kernel process ETW when the service has permission.
 
 ## Runtime flow
 
-The LocalSystem service runs the monitor while the desktop app is closed. A small native helper controls a private real-time `Microsoft-Windows-Kernel-Process` ETW session; process start/stop events trigger immediate refreshes while bounded polling reconciles state and supplies CPU/network metrics. A read-only WFP net-event subscription reports capability/activity without adding filters. IP Helper remains the endpoint inventory source, and the elevated service enables supported TCP Extended Statistics collection for real per-connection byte counters.
+```text
+Windows processes/endpoints
+        |
+        +-- Tool Help + IP Helper + TCP EStats
+        +-- ETW helper (process event coverage/counts)
+        `-- read-only WFP subscription (coverage/counts; no filters)
+                              |
+                              v
+                     OpenGuardService.exe
+                  / scanner | SQLite | updates \
+                 /          | policy | quarantine \
+                v           v                    v
+       OpenGuard.exe <== bounded named pipe ==> OpenGuardCLI.exe
+```
 
-The scanner runs on a worker, streams SHA-256, limits in-memory inspection, and combines transparent heuristics, YARA-X, Authenticode, and the installed AMSI provider. Security-content manifests are authenticated with a pinned Ed25519 public key; every content file is size/hash checked and validated in staging before an atomic version switch.
-
-SQLite uses WAL mode and one connection per operation. The database, logs, and quarantine live under `%LOCALAPPDATA%\OpenGuard` unless `OPENGUARD_DATA_DIR` is set for tests or portable diagnostics.
+The UI performs no privileged collection, database access, DNS lookup, or file scanning on its thread. It requests coalesced snapshots and applies filtering/sorting to retained view-model collections. Scans run on service background workers with progress and cancellation.
 
 ## Windows API choices
 
-- Tool Help + process query APIs provide a robust unprivileged inventory, with protected processes represented as limited records.
-- `GetExtendedTcpTable` and `GetExtendedUdpTable` expose current owner-PID endpoints. `GetPerTcpConnectionEStats` supplies observed TCP byte totals after the LocalSystem service enables collection; the desktop app computes rates from monotonic deltas. UDP byte rates and encrypted packet contents remain unavailable.
-- `WinVerifyTrust` checks Authenticode policy. Only a return value of zero is trusted; unsigned, invalid, and offline-revocation cases remain distinct from an application allow-list.
-- `StartTraceW`, `EnableTraceEx2`, `OpenTraceW`, and `ProcessTrace` consume kernel process events from the elevated service. Failure is visible and falls back to polling.
-- `FwpmEngineOpen0` and `FwpmNetEventSubscribe0` create a read-only net-event subscription. OpenGuard installs no WFP filter or callout.
-- AMSI is consumed as an optional second opinion from the installed antimalware provider. OpenGuard is not an AMSI provider.
+- Tool Help and process-query APIs provide process inventory; protected processes remain visible with limited evidence.
+- `GetExtendedTcpTable` and `GetExtendedUdpTable` map IPv4/IPv6 endpoints to owning PIDs. Supported TCP connections use Extended Statistics monotonic byte counters, from which the UI derives transfer rates. UDP byte rates and packet contents are not available.
+- PTR names are resolved by one bounded, deduplicated Windows resolver worker with a finite cache and TTL.
+- `WinVerifyTrust` checks Authenticode. Only exact success is trusted.
+- `StartTraceW`/`ProcessTrace` power the ETW helper. Access denial is reported as limited coverage and inventory polling continues.
+- `FwpmEngineOpen0`/`FwpmNetEventSubscribe0` provide read-only WFP event coverage. OpenGuard installs no filter or callout.
+- AMSI is an optional second opinion supplied by the antimalware provider configured on the PC.
 
 ## Trust boundaries
 
-```text
-Untrusted files/process/network metadata
-          |
-          v
-native/ctypes adapters + bounded parsers ---- installed AMSI provider (optional)
-          |
-          v
-heuristics + YARA-X ---- SQLite (shared WAL) ---- quarantine (explicit action)
-          ^
-          |
-Ed25519 manifest -> hash/size/rule validation -> atomic content activation
-          |
-          v
-desktop UI / JSON CLI
-```
+The named pipe rejects remote clients, has a bounded 4 MiB frame, uses strict typed JSON, and captures the Windows client PID/SID under impersonation. User-owned state—scan jobs, events, exclusions, hash allowances, and quarantine records—is scoped to that authenticated SID. The service is the only database owner.
 
-The current user, LocalSystem service, local database, and UI are not a security boundary against a hostile local administrator or kernel attacker. File paths may race between observation and scan/quarantine; quarantine verifies the scanned hash before moving and verifies it again before restore, but OpenGuard does not hold kernel-level file identities.
+Scanning streams SHA-256 and bounds file size/in-memory inspection before YARA-X, heuristics, Authenticode, and AMSI are applied. Quarantine rechecks the scanned digest, uses a non-executable authenticated container, never overwrites on restore, and verifies integrity again before restoration.
 
-## Privileged boundary
+Security-content manifests are canonicalized and verified with a pinned Ed25519 key. HTTPS transport, declared size, SHA-256, schema, CIDR entries, and YARA compilation must all pass in staging before atomic activation; the previous version remains available for rollback.
 
-ETW/WFP subscriptions run in the service because their access controls normally reject the desktop user's token. The desktop keeps a user-mode fallback so loss of the service is visible rather than fatal. There is no privileged IPC command surface in v0.2; service health is shared through narrowly scoped SQLite metadata.
+The standalone scanner currently runs with its caller's token, while service-requested scans run on bounded background threads in the service. A restricted-token/job-object scanner subprocess is a future hardening boundary, not a current claim.
 
-Packet/stream interception and file-system minifilters remain out of scope. If a future audited driver is justified, it must use Microsoft retail signing. OpenGuard will not ask users to enable test signing or disable Secure Boot.
+## Explicit limits
 
-## Source references
+OpenGuard does not decrypt TLS, inspect packet payloads, intercept files in kernel mode, register with Windows Security, or protect against a hostile administrator/kernel attacker. ETW, WFP event subscription, and some TCP counters require the installed LocalSystem service; unavailable access is surfaced as limited coverage. OpenGuard does not automatically delete files or terminate processes.
 
-- [Windows Filtering Platform overview](https://learn.microsoft.com/en-us/windows/win32/fwp/windows-filtering-platform-start-page)
-- [WFP architecture](https://learn.microsoft.com/en-us/windows/win32/fwp/windows-filtering-platform-architecture-overview)
-- [GetExtendedTcpTable](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable)
-- [Event tracing sessions and permissions](https://learn.microsoft.com/en-us/windows/win32/etw/controlling-event-tracing-sessions)
-- [SystemTraceProvider sessions](https://learn.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-a-systemtraceprovider-session)
-- [WinVerifyTrust](https://learn.microsoft.com/en-us/windows/win32/api/wintrust/nf-wintrust-winverifytrust)
-- [Antimalware Scan Interface](https://learn.microsoft.com/en-us/windows/win32/amsi/antimalware-scan-interface-portal)
-- [Driver signing](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/driver-signing)
-- [MSIX package signing](https://learn.microsoft.com/en-us/windows/msix/package/signing-package-overview)
-- [YARA-X documentation](https://virustotal.github.io/yara-x/docs/)
-- [ClamAV documentation](https://docs.clamav.net/)
+Keep Microsoft Defender or another mature antivirus enabled. Future minifilter/WFP enforcement requires WDK validation, independent review, and Microsoft-compatible retail signing; users will never be asked to disable Secure Boot or enable test signing for a public build.
+
+See [NATIVE_ARCHITECTURE.md](NATIVE_ARCHITECTURE.md) for the detailed decision record and release criteria.

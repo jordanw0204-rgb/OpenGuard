@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="OpenGuard.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="OpenGuard">
+    <Grid Background="#FF08090B">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="58" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Grid
+            x:Name="AppTitleBar"
+            Padding="16,0,156,0"
+            Background="#FF08090B">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Border
+                Width="34"
+                Height="34"
+                VerticalAlignment="Center"
+                Background="#FF12151A"
+                BorderBrush="#FF292D35"
+                BorderThickness="1"
+                CornerRadius="10">
+                <Image
+                    Width="27"
+                    Height="27"
+                    Source="ms-appx:///Assets/Brand/openguard-mark.png"
+                    Stretch="Uniform" />
+            </Border>
+            <StackPanel Grid.Column="1" Margin="11,0,0,0" VerticalAlignment="Center" Spacing="0">
+                <TextBlock
+                    FontFamily="Segoe UI Variable Display"
+                    FontSize="15"
+                    FontWeight="SemiBold"
+                    Foreground="{StaticResource OpenGuardTextBrush}"
+                    Text="OpenGuard" />
+                <TextBlock
+                    FontSize="8"
+                    CharacterSpacing="160"
+                    Foreground="{StaticResource OpenGuardMutedBrush}"
+                    Text="SECURITY CONSOLE" />
+            </StackPanel>
+            <StackPanel
+                Grid.Column="3"
+                Orientation="Horizontal"
+                VerticalAlignment="Center"
+                Spacing="7">
+                <Ellipse Width="6" Height="6" Fill="{StaticResource OpenGuardAccentBrush}" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontSize="9"
+                    CharacterSpacing="120"
+                    Foreground="{StaticResource OpenGuardMutedBrush}"
+                    Text="LOCAL ONLY" />
+            </StackPanel>
+            <Rectangle
+                Grid.ColumnSpan="4"
+                Height="1"
+                VerticalAlignment="Bottom"
+                Fill="#FF1D2026" />
+        </Grid>
+        <Frame x:Name="RootFrame" Grid.Row="1" />
+    </Grid>
+</Window>

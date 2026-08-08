@@ -1,4 +1,4 @@
-name: Tagged release
+name: Tagged native release
 
 on:
   push:
@@ -10,20 +10,19 @@ permissions:
 jobs:
   build-release:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Check out source
         uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
         with:
-          python-version: '3.14'
+          dotnet-version: 10.0.x
 
-      - name: Install pinned build dependency
-        shell: pwsh
-        run: python -m pip install --disable-pip-version-check -r requirements-build.txt
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
 
       - name: Prepare optional Authenticode certificate
         shell: pwsh
@@ -34,19 +33,34 @@ jobs:
             [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\openguard-signing.pfx", [Convert]::FromBase64String($env:SIGNING_CERT_BASE64))
           }
 
-      - name: Test and build
+      - name: Test and build native release
         shell: pwsh
         env:
           OPENGUARD_SIGN_PFX: ${{ runner.temp }}\openguard-signing.pfx
           OPENGUARD_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
         run: ./scripts/build.ps1
 
-      - name: Smoke-test packaged CLI
+      - name: Classify release trust
         shell: pwsh
-        run: ./dist/OpenGuard/OpenGuardCLI.exe doctor --pretty
+        run: |
+          if (Test-Path -LiteralPath "$env:RUNNER_TEMP\openguard-signing.pfx") {
+            'OPENGUARD_RELEASE_PRERELEASE=false' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            'OPENGUARD_RELEASE_PRERELEASE=true' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
 
       - name: Publish GitHub release assets
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME release/*.zip release/*.sha256 --verify-tag --generate-notes
+        run: |
+          $assets = Get-ChildItem -LiteralPath 'release' -File | Select-Object -ExpandProperty FullName
+          if (-not $assets) { throw 'No release assets were produced.' }
+          $arguments = @('release', 'create', $env:GITHUB_REF_NAME) + $assets + @('--verify-tag', '--generate-notes')
+          if ($env:OPENGUARD_RELEASE_PRERELEASE -eq 'true') {
+            $arguments += '--prerelease'
+            $arguments += '--notes'
+            $arguments += 'Unsigned development release: no CA-issued Windows code-signing certificate was configured. Verify the published SHA-256 files before testing.'
+          }
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed with exit code $LASTEXITCODE" }

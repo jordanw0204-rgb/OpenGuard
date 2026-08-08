@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>OpenGuard.App</RootNamespace>
+    <AssemblyName>OpenGuard</AssemblyName>
+    <Version>0.4.0</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsAppSdkUndockedRegFreeWinRTInitialize>true</WindowsAppSdkUndockedRegFreeWinRTInitialize>
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
+    <AppxPackage>false</AppxPackage>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <SelfContained>true</SelfContained>
+    <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">true</PublishReadyToRun>
+    <PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+    <Content Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+  </ItemGroup>
+
+  <!--
+    The WinUI build writes the application's compiled XAML resources to a
+    project PRI file. The .NET publish target does not currently carry that
+    file to a custom publish directory for this unpackaged project, which
+    makes ms-appx:///MainWindow.xaml fail at runtime. Keep the application PRI
+    next to the executable just as the regular build output does.
+  -->
+  <Target Name="CopyApplicationPriToPublishDirectory" AfterTargets="Publish">
+    <PropertyGroup>
+      <ApplicationPriPath>$(TargetDir)$(AssemblyName).pri</ApplicationPriPath>
+    </PropertyGroup>
+    <ItemGroup>
+      <ApplicationXbf Include="$(TargetDir)**\*.xbf" />
+    </ItemGroup>
+    <Copy
+      SourceFiles="$(ApplicationPriPath)"
+      DestinationFolder="$(PublishDir)"
+      SkipUnchangedFiles="true"
+      Condition="Exists('$(ApplicationPriPath)')" />
+    <Copy
+      SourceFiles="@(ApplicationXbf)"
+      DestinationFiles="@(ApplicationXbf->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
+</Project>

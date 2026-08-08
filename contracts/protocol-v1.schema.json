@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openguard.local/contracts/protocol-v1.schema.json",
+  "title": "OpenGuard local IPC envelope v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "request_id", "body"],
+  "properties": {
+    "protocol": { "const": 1 },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "body": { "type": "object" }
+  }
+}

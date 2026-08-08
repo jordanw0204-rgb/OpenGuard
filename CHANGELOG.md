@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0 — 2026-08-08
+
+- Added an in-app process investigation view with SHA-256, signer and identity details, parent/child relationships, owned connections, persistence matches, and explainable evidence.
+- Added contextual behavior correlation for newly observed or unsigned processes, public and reputation-matched destinations, and suspicious Office/browser child-process chains.
+- Added a per-machine MSI that installs the WinUI console and automatic LocalSystem telemetry service, plus administrative extraction and checksum validation.
+- Hardened Authenticode automation with SHA-256 file digests, RFC 3161 timestamps, post-sign verification, and explicit unsigned-development labeling when no trusted certificate is configured.
+- Expanded safe adversarial and false-positive tests for behavior correlations while retaining stable process and network row ordering.
+
+## 0.3.2 — 2026-08-07
+
+- Stopped live CPU, memory, and transfer updates from continuously re-ranking process and network rows.
+- Preserved row order and selection between snapshots while keeping header clicks and filters immediately sortable.
+- Coalesced each activity graph's repeated collection notifications into one low-priority UI render per update cycle.
+
+## 0.3.1 — 2026-08-07
+
+- Stabilized process and network tables with keyed in-place row updates that preserve selection and virtualization state.
+- Added click-to-sort headers with explicit direction indicators and CPU/download defaults.
+- Added rolling CPU/memory and download/upload activity graphs with bounded three-minute histories.
+- Added safe right-click actions for file location, OpenGuard scanning, web lookup, and copying process/connection details.
+
+## 0.3.0 — 2026-08-07
+
+- Replaced the prototype runtime with a Rust service, scanner, CLI, SQLite layer, signed updater, and Windows API collector.
+- Rebuilt the desktop client in self-contained WinUI 3 with a responsive graphite design system and a new non-shield OpenGuard mark.
+- Added authenticated per-user IPC, scan jobs, profiles, cancellation, quarantine, exclusions, allow-list controls, and security-content rollback.
+- Added real IPv4/IPv6 owner mapping, TCP byte/rate counters, signed IP/CIDR reputation, background PTR enrichment, read-only WFP coverage, and ETW helper integration.
+- Added fully native build, CI, release, signing, and zero-Python artifact checks.
+
 ## 0.2.2 — 2026-08-06
 
 - Moved Security-page content, service, and database refreshes off the Tk event thread.

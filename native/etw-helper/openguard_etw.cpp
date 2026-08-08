@@ -92,6 +92,23 @@ BOOL WINAPI ConsoleHandler(DWORD signal) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+    bool probe = false;
+    DWORD parent_pid = 0;
+    std::wstring stop_event_name;
+    for (int index = 1; index < argc; ++index) {
+        if (_wcsicmp(argv[index], L"--probe") == 0) {
+            probe = true;
+        } else if (_wcsicmp(argv[index], L"--stop-event") == 0 && index + 1 < argc) {
+            stop_event_name = argv[++index];
+        } else if (_wcsicmp(argv[index], L"--parent-pid") == 0 && index + 1 < argc) {
+            wchar_t* end = nullptr;
+            const unsigned long parsed = std::wcstoul(argv[++index], &end, 10);
+            if (end && *end == L'\0' && parsed <= MAXDWORD) {
+                parent_pid = static_cast<DWORD>(parsed);
+            }
+        }
+    }
+
     g_session_name = L"OpenGuard-KernelProcess-" + std::to_wstring(GetCurrentProcessId());
     const size_t property_size = sizeof(EVENT_TRACE_PROPERTIES) +
                                  (g_session_name.size() + 1) * sizeof(wchar_t);
@@ -118,15 +135,6 @@ int wmain(int argc, wchar_t** argv) {
         return 3;
     }
 
-    bool probe = false;
-    std::wstring stop_event_name;
-    for (int index = 1; index < argc; ++index) {
-        if (_wcsicmp(argv[index], L"--probe") == 0) {
-            probe = true;
-        } else if (_wcsicmp(argv[index], L"--stop-event") == 0 && index + 1 < argc) {
-            stop_event_name = argv[++index];
-        }
-    }
     if (probe) {
         std::cout << "{\"status\":\"available\",\"provider\":\"Microsoft-Windows-Kernel-Process\"}"
                   << std::endl;
@@ -147,15 +155,29 @@ int wmain(int argc, wchar_t** argv) {
         return 4;
     }
     SetConsoleCtrlHandler(ConsoleHandler, TRUE);
+    std::vector<HANDLE> shutdown_handles;
     if (!stop_event_name.empty()) {
-        HANDLE stop_event = OpenEventW(SYNCHRONIZE, FALSE, stop_event_name.c_str());
-        if (stop_event) {
-            std::thread([stop_event]() {
-                WaitForSingleObject(stop_event, INFINITE);
-                StopTraceSession();
-                CloseHandle(stop_event);
-            }).detach();
+        if (HANDLE stop_event = OpenEventW(SYNCHRONIZE, FALSE, stop_event_name.c_str())) {
+            shutdown_handles.push_back(stop_event);
         }
+    }
+    if (parent_pid != 0) {
+        if (HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, parent_pid)) {
+            shutdown_handles.push_back(parent);
+        } else {
+            std::cerr << "{\"warning\":\"parent_watch_unavailable\",\"win32_error\":"
+                      << GetLastError() << "}" << std::endl;
+        }
+    }
+    if (!shutdown_handles.empty()) {
+        std::thread([handles = std::move(shutdown_handles)]() {
+            WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), FALSE,
+                                   INFINITE);
+            StopTraceSession();
+            for (HANDLE handle : handles) {
+                CloseHandle(handle);
+            }
+        }).detach();
     }
     std::cout << "{\"status\":\"running\",\"provider\":\"Microsoft-Windows-Kernel-Process\"}"
               << std::endl;

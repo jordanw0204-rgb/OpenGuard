@@ -1,3 +1,0 @@
-# Reproducible Windows release environment.
--r requirements-runtime.txt
-pyinstaller==6.21.0
