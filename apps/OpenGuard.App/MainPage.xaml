@@ -31,6 +31,9 @@
             <NavigationViewItem Content="Network" Tag="network">
                 <NavigationViewItem.Icon><FontIcon Glyph="&#xE774;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
             </NavigationViewItem>
+            <NavigationViewItem Content="Investigation" Tag="investigation">
+                <NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
             <NavigationViewItem Content="Scanner" Tag="scanner">
                 <NavigationViewItem.Icon><FontIcon Glyph="&#xE721;" Style="{StaticResource NavigationIconStyle}" /></NavigationViewItem.Icon>
             </NavigationViewItem>

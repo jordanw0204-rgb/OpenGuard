@@ -3,13 +3,17 @@
 OpenGuard is an open-source, local-first Windows security monitor and scanner. The native Rust service owns monitoring, policy, SQLite state, scanning, signed updates, and quarantine; the WinUI 3 desktop app presents that data without blocking its UI thread.
 
 > [!IMPORTANT]
-> OpenGuard 0.3 is a security companion, not yet a replacement for Microsoft Defender or another mature endpoint antivirus. It does not decrypt TLS, inspect packet payloads, install a kernel driver, or register with Windows Security. Keep an established antivirus enabled.
+> OpenGuard 0.5 is a security companion, not yet a replacement for Microsoft Defender or another mature endpoint antivirus. It does not decrypt TLS, inspect packet payloads, install a kernel driver, or register with Windows Security. Keep an established antivirus enabled.
 
 ## Current capabilities
 
 - Process inventory with sampled CPU, memory, executable identity, Authenticode status, risk score, evidence, and unseen-executable alerts
 - Process investigation with SHA-256, signer/identity evidence, parent and child relationships, owned connections, and matching Run/RunOnce or Startup-folder persistence
 - Explainable behavior correlation for new or untrusted processes, public or reputation-matched destinations, and suspicious Office/browser child-process chains
+- Real-time monitoring of user-writable roots with bounded event delivery, NTFS USN gap detection, subtree reconciliation after overflow, and concurrency-limited scans of changed executable/script files
+- Cursor-paginated investigation timeline for process starts/stops and command lines where ETW exposes them, file activity, DNS-enriched network flows, persistence changes, detections, and audited responses
+- Persistence inventory for services, drivers, scheduled tasks, WMI consumers, Run/RunOnce, and Chrome, Edge, and Firefox extensions with explicit coverage states
+- Explicit, audited response actions for identity-revalidated process control, detection-gated quarantine, temporary outbound destination blocks, and reversible startup disable/restore
 - IPv4/IPv6 TCP and UDP ownership, real TCP Extended Statistics byte/rate counters, bounded asynchronous PTR names, and signed local IP/CIDR reputation
 - Streaming SHA-256, YARA-X 1.19, PE/script/path heuristics, EICAR detection, and the installed Windows AMSI provider
 - File, folder, Quick, Downloads, Startup, and explicitly confirmed Full scan profiles with progress and cancellation
@@ -50,7 +54,7 @@ Run `apps\OpenGuard.App\bin\x64\Debug\net10.0-windows10.0.26100.0\win-x64\OpenGu
 Install a built MSI from an elevated terminal:
 
 ```powershell
-msiexec.exe /i .\release\OpenGuard-0.4.0-win-x64.msi /norestart
+msiexec.exe /i .\release\OpenGuard-0.5.0-win-x64.msi /norestart
 ```
 
 The installer registers and starts `OpenGuardNative` as a LocalSystem automatic service. Windows will show an elevation prompt for this per-machine installation.
@@ -94,7 +98,7 @@ Security content defaults to `security-content/manifest.json`. The updater accep
 
 ## Privacy and limits
 
-OpenGuard stores its state locally. PTR resolution uses the Windows resolver. AMSI requests go to the antimalware provider configured on the PC and may follow that provider's cloud-protection policy. OpenGuard does not disable Defender, change Defender exclusions, install WFP filters, decrypt TLS, or upload files.
+OpenGuard stores its state locally. PTR resolution uses the Windows resolver. AMSI requests go to the antimalware provider configured on the PC and may follow that provider's cloud-protection policy. OpenGuard does not disable Defender, change Defender exclusions, install kernel WFP callouts, decrypt TLS, or upload files. A user-confirmed temporary network response adds a narrowly scoped outbound Windows Firewall rule and removes it at expiry or rollback.
 
 See [native architecture](docs/NATIVE_ARCHITECTURE.md), [product plan](docs/PRODUCT_PLAN.md), [security policy](SECURITY.md), and [contributing](CONTRIBUTING.md).
 

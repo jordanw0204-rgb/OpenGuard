@@ -100,4 +100,37 @@ public sealed partial class NetworkPage : Page
             ProcessActions.CopyText(text);
         }
     }
+
+    private async void OnBlockDestination(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuFlyoutItem { Tag: NetworkRow { CanBlockRemote: true } row })
+        {
+            return;
+        }
+        NativeResponseActionRequest request = InvestigationPage.EmptyRequest("block_remote_address") with
+        {
+            ProcessId = row.ProcessId,
+            ExpectedPath = row.ProcessPath,
+            Target = row.Destination,
+            RemoteAddress = row.RemoteAddress,
+            DurationMinutes = 15,
+        };
+        try
+        {
+            NativeResponseActionResult? result = await ResponseActionService.ConfirmAsync(
+                XamlRoot,
+                request,
+                $"Temporarily block {row.RemoteAddress}?",
+                "OpenGuard will add a program-scoped outbound Windows Firewall rule and remove it after 15 minutes.",
+                "Block 15 minutes");
+            if (result is not null)
+            {
+                await ResponseActionService.ShowResultAsync(XamlRoot, result);
+            }
+        }
+        catch (Exception error)
+        {
+            await ResponseActionService.ShowErrorAsync(XamlRoot, "Network response failed safely", error);
+        }
+    }
 }

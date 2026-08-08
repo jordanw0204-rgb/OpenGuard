@@ -144,4 +144,53 @@ public sealed partial class ProcessesPage : Page
             ProcessActions.CopyText(text);
         }
     }
+
+    private async void OnSuspendProcess(object sender, RoutedEventArgs e) =>
+        await RunProcessResponseAsync(sender, "suspend_process", "Suspend this process?",
+            "Windows will suspend the process's currently visible threads. New threads are not automatically suspended.", "Suspend");
+
+    private async void OnResumeProcess(object sender, RoutedEventArgs e) =>
+        await RunProcessResponseAsync(sender, "resume_process", "Resume this process?",
+            "Windows will resume the process's currently visible suspended threads.", "Resume");
+
+    private async void OnTerminateProcess(object sender, RoutedEventArgs e) =>
+        await RunProcessResponseAsync(sender, "terminate_process", "Terminate this process?",
+            "The process will be ended immediately after OpenGuard revalidates its PID and executable path. Unsaved application data may be lost.", "Terminate");
+
+    private async void OnQuarantineExecutable(object sender, RoutedEventArgs e) =>
+        await RunProcessResponseAsync(sender, "quarantine_file", "Scan and quarantine this executable?",
+            "OpenGuard will rescan the exact file and only isolate it if the current result is suspicious or malicious.", "Scan and quarantine");
+
+    private async Task RunProcessResponseAsync(
+        object sender,
+        string action,
+        string title,
+        string explanation,
+        string buttonText)
+    {
+        if (sender is not MenuFlyoutItem { Tag: uint pid } ||
+            ViewModel.FindProcess(pid) is not ProcessRow { HasProcessPath: true } process)
+        {
+            return;
+        }
+        NativeResponseActionRequest request = InvestigationPage.EmptyRequest(action) with
+        {
+            ProcessId = pid,
+            ExpectedPath = process.ScanPath,
+            Target = process.ScanPath,
+        };
+        try
+        {
+            NativeResponseActionResult? result = await ResponseActionService.ConfirmAsync(
+                XamlRoot, request, title, explanation, buttonText);
+            if (result is not null)
+            {
+                await ResponseActionService.ShowResultAsync(XamlRoot, result);
+            }
+        }
+        catch (Exception error)
+        {
+            await ResponseActionService.ShowErrorAsync(XamlRoot, "Response failed safely", error);
+        }
+    }
 }

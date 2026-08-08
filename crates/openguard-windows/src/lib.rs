@@ -1,5 +1,16 @@
 #![cfg(windows)]
 
+mod file_monitor;
+mod persistence;
+mod response;
+
+pub use file_monitor::{FileActivity, FileMonitor, FileMonitorSnapshot, UsnCheckpoint};
+pub use persistence::{PersistenceContext, collect_persistence};
+pub use response::{
+    ProcessControlResult, block_remote_address, control_process, remove_firewall_rule,
+    set_persistence_enabled,
+};
+
 use openguard_detection::{RiskEnvironment, assess_process};
 use openguard_domain::{
     CoverageNote, CoverageState, NetworkEndpoint, ProcessRecord, ScanFinding, ScanVerdict,
@@ -1367,6 +1378,32 @@ fn is_elevated() -> bool {
         .is_ok()
             && elevation.TokenIsElevated != 0
     }
+}
+
+/// Resolves the current executable path for a process using limited query access.
+///
+/// # Errors
+///
+/// Returns an API error when the process exits, is protected, or denies query access.
+pub fn process_image_path(pid: u32) -> Result<std::path::PathBuf, WindowsError> {
+    let handle = OwnedHandle::new(
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+            .map_err(|error| WindowsError::Api(format!("open PID {pid}: {error}")))?,
+    );
+    let mut path_buffer = vec![0_u16; MAX_PROCESS_PATH];
+    let mut path_length = u32::try_from(path_buffer.len()).unwrap_or(u32::MAX);
+    unsafe {
+        windows::Win32::System::Threading::QueryFullProcessImageNameW(
+            handle.get(),
+            windows::Win32::System::Threading::PROCESS_NAME_FORMAT::default(),
+            PWSTR(path_buffer.as_mut_ptr()),
+            &raw mut path_length,
+        )
+    }
+    .map_err(|error| WindowsError::Api(format!("query PID {pid} image: {error}")))?;
+    Ok(std::path::PathBuf::from(String::from_utf16_lossy(
+        &path_buffer[..path_length as usize],
+    )))
 }
 
 fn query_process(pid: u32) -> Option<ProcessDetails> {

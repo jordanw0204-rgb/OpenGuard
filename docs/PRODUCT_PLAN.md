@@ -34,6 +34,13 @@ It is not yet a replacement for Microsoft Defender or another mature endpoint su
 - Per-machine MSI deployment of the WinUI console and automatic LocalSystem telemetry service
 - Release verification for native-only payloads, checksums, Authenticode status, and administrative MSI extraction
 
+## Completed v0.5 real-time investigation and response
+
+- User-mode real-time file monitoring with bounded queues, USN journal gap checks, reconciliation, and targeted changed-file scans
+- Historical process, file, network, persistence, detection, and response timeline with owner-scoped cursor pagination
+- Services, drivers, scheduled tasks, WMI consumer, Run/RunOnce, and browser-extension persistence inventory
+- Explicit, audited, identity-bound process control, detection-gated quarantine, temporary outbound blocking, and reversible safe startup response
+
 ## Current security architecture
 
 ```text
@@ -53,8 +60,7 @@ Windows service -> native ETW process events + read-only WFP net events
 
 1. Obtain and protect a CA-issued Authenticode certificate; build public releases only through the signing workflow.
 2. Independent security review, parser fuzzing, false-positive corpus, performance budgets, and update-key rotation drills.
-3. Authenticated service IPC with explicit ACLs if interactive privileged commands are added.
-4. Curated community rule/reputation operations with reproducible provenance and review.
-5. Only if evidence proves necessary: independently audited, Microsoft-signed kernel components.
+3. Curated community rule/reputation operations with reproducible provenance and review.
+4. Only if evidence proves necessary: independently audited, Microsoft-signed kernel components.
 
 The detailed requirements and acceptance criteria are maintained in `.taskmaster/docs/prd.txt`.

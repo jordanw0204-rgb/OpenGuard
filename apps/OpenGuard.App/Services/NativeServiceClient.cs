@@ -48,6 +48,51 @@ internal sealed class NativeServiceClient
             ?? [];
     }
 
+    public async Task<NativeTimelinePage> GetTimelineAsync(
+        long? beforeId,
+        uint limit,
+        string? category,
+        uint? processId,
+        string? search,
+        CancellationToken cancellationToken)
+    {
+        JsonElement data = await SendAsync(
+            new RequestBody(
+                "get_timeline",
+                new TimelinePayload(beforeId, limit, category, processId, search)),
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
+        EnsureDataType(data, "timeline");
+        return data.GetProperty("value").Deserialize<NativeTimelinePage>(JsonOptions)
+            ?? throw new NativeServiceException("Native service returned an empty timeline page.");
+    }
+
+    public async Task<NativePersistenceInventory> GetPersistenceAsync(
+        bool refresh,
+        CancellationToken cancellationToken)
+    {
+        JsonElement data = await SendAsync(
+            new RequestBody("get_persistence", new PersistencePayload(refresh)),
+            TimeSpan.FromSeconds(25),
+            cancellationToken);
+        EnsureDataType(data, "persistence");
+        return data.GetProperty("value").Deserialize<NativePersistenceInventory>(JsonOptions)
+            ?? throw new NativeServiceException("Native service returned an empty persistence inventory.");
+    }
+
+    public async Task<NativeResponseActionResult> ExecuteResponseAsync(
+        NativeResponseActionRequest request,
+        CancellationToken cancellationToken)
+    {
+        JsonElement data = await SendAsync(
+            new RequestBody("execute_response", new ExecuteResponsePayload(request)),
+            TimeSpan.FromSeconds(45),
+            cancellationToken);
+        EnsureDataType(data, "response_action");
+        return data.GetProperty("value").Deserialize<NativeResponseActionResult>(JsonOptions)
+            ?? throw new NativeServiceException("Native service returned an empty response result.");
+    }
+
     public async Task<string> GetStatusTextAsync(CancellationToken cancellationToken)
     {
         try
@@ -344,6 +389,17 @@ internal sealed class NativeServiceClient
 
     private sealed record LimitPayload(uint Limit);
 
+    private sealed record TimelinePayload(
+        long? BeforeId,
+        uint Limit,
+        string? Category,
+        uint? ProcessId,
+        string? Search);
+
+    private sealed record PersistencePayload(bool Refresh);
+
+    private sealed record ExecuteResponsePayload(NativeResponseActionRequest Request);
+
     private sealed record RestoreQuarantinePayload(string QuarantineId, string? Destination);
 
     private sealed record ExclusionPayload(string Path, bool Recursive);
@@ -453,6 +509,59 @@ internal sealed record NativeSecurityEvent(
     string Path,
     string CreatedAt,
     bool Resolved);
+
+internal sealed record NativeTimelineEvent(
+    long? Id,
+    string Category,
+    string Action,
+    string Severity,
+    string Title,
+    string Detail,
+    uint? ProcessId,
+    string Path,
+    string RemoteAddress,
+    string CorrelationId,
+    string OccurredAt);
+
+internal sealed record NativeTimelinePage(
+    IReadOnlyList<NativeTimelineEvent> Events,
+    long? NextBeforeId);
+
+internal sealed record NativePersistenceItem(
+    string Id,
+    string Category,
+    string Name,
+    string Command,
+    string Location,
+    string State,
+    string Risk,
+    IReadOnlyList<string> Evidence,
+    string DetectedAt,
+    string ResponseCapability);
+
+internal sealed record NativePersistenceInventory(
+    IReadOnlyList<NativePersistenceItem> Items,
+    string CollectedAt,
+    IReadOnlyList<NativeCoverage> Coverage);
+
+internal sealed record NativeResponseActionRequest(
+    string Action,
+    uint? ProcessId,
+    string ExpectedPath,
+    string Target,
+    string RemoteAddress,
+    uint? DurationMinutes,
+    string PersistenceId,
+    string RollbackId,
+    string Confirmation);
+
+internal sealed record NativeResponseActionResult(
+    string Action,
+    string Target,
+    string Outcome,
+    string? RollbackId,
+    string? ExpiresAt,
+    long AuditEventId);
 
 internal sealed record NativeContentStatus(
     string ActiveVersion,

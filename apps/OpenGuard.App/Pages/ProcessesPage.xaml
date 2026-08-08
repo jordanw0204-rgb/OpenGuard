@@ -83,6 +83,11 @@
                                         <MenuFlyoutItem Text="Open file location" Tag="{x:Bind ScanPath, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnOpenFileLocation" />
                                         <MenuFlyoutItem Text="Scan with OpenGuard" Tag="{x:Bind ScanPath, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnScanFromMenu" />
                                         <MenuFlyoutSeparator />
+                                        <MenuFlyoutItem Text="Suspend process…" Tag="{x:Bind PidValue, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnSuspendProcess" />
+                                        <MenuFlyoutItem Text="Resume process…" Tag="{x:Bind PidValue, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnResumeProcess" />
+                                        <MenuFlyoutItem Text="Terminate process…" Tag="{x:Bind PidValue, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnTerminateProcess" />
+                                        <MenuFlyoutItem Text="Quarantine executable…" Tag="{x:Bind PidValue, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnQuarantineExecutable" />
+                                        <MenuFlyoutSeparator />
                                         <MenuFlyoutItem Text="Search process on web" Tag="{x:Bind Application, Mode=OneWay}" Click="OnSearchWeb" />
                                         <MenuFlyoutItem Text="Copy executable path" Tag="{x:Bind ScanPath, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnCopyText" />
                                         <MenuFlyoutItem Text="Copy process details" Tag="{x:Bind DetailsText, Mode=OneWay}" Click="OnCopyText" />

@@ -3,15 +3,19 @@ use clap::Parser;
 use openguard_detection::{BehaviorContext, FileScanner, ScanError, correlate_behavior};
 use openguard_domain::{
     AllowedHashRecord, ApiError, ContentStatus, CoverageNote, CoverageState, ErrorCode,
-    ExclusionRecord, PROTOCOL_VERSION, QuarantineRecord, Request, RequestEnvelope, ResponseData,
-    ResponseEnvelope, ScanFinding, ScanJobState, ScanJobStatus, ScanProfile, ScanVerdict,
-    SecurityEvent, ServiceHealth, Severity, SignatureStatus, SystemSnapshot,
+    ExclusionRecord, NetworkEndpoint, PROTOCOL_VERSION, PersistenceInventory, QuarantineRecord,
+    Request, RequestEnvelope, ResponseActionKind, ResponseActionRequest, ResponseActionResult,
+    ResponseData, ResponseEnvelope, ScanFinding, ScanJobState, ScanJobStatus, ScanProfile,
+    ScanVerdict, SecurityEvent, ServiceHealth, Severity, SignatureStatus, SystemSnapshot,
+    TimelineEvent,
 };
 use openguard_ipc::{read_frame, validate_request, write_frame};
-use openguard_storage::{Database, SeenExecutable};
+use openguard_storage::{Database, ResponseRollback, SeenExecutable};
 use openguard_updates::{DEFAULT_MANIFEST_URL, SecurityContentUpdater};
 use openguard_windows::{
-    ReputationFeed, WindowsCollector, apply_windows_scan_signals, platform_health,
+    FileMonitor, PersistenceContext, ReputationFeed, WindowsCollector, apply_windows_scan_signals,
+    block_remote_address, collect_persistence, control_process, platform_health,
+    remove_firewall_rule, set_persistence_enabled,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -25,7 +29,8 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::{Receiver, SyncSender, sync_channel},
     },
     thread,
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -53,8 +58,9 @@ use windows::{
         },
         System::Threading::{CreateEventW, GetCurrentThread, OpenThreadToken, SetEvent},
         UI::Shell::{
-            FOLDERID_CommonStartup, FOLDERID_Downloads, FOLDERID_LocalAppData, FOLDERID_Startup,
-            KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+            FOLDERID_CommonStartup, FOLDERID_Desktop, FOLDERID_Downloads, FOLDERID_LocalAppData,
+            FOLDERID_Profile, FOLDERID_RoamingAppData, FOLDERID_Startup, KF_FLAG_DEFAULT,
+            SHGetKnownFolderPath,
         },
     },
     core::{GUID, HSTRING, PWSTR, w},
@@ -109,6 +115,12 @@ struct ServiceState {
     content_version: String,
     content_source: String,
     etw_monitor: Option<EtwProcessMonitor>,
+    file_monitors: HashMap<String, FileMonitor>,
+    persistence_cache: HashMap<String, PersistenceInventory>,
+    realtime_scans: Arc<AtomicUsize>,
+    active_processes: HashMap<u32, String>,
+    active_network: HashMap<String, NetworkEndpoint>,
+    snapshot_baselined: bool,
 }
 
 struct ScanJob {
@@ -150,6 +162,17 @@ struct EtwProcessMonitor {
     stop_event: HANDLE,
     state: Arc<Mutex<EtwMonitorState>>,
     event_count: Arc<std::sync::atomic::AtomicU64>,
+    event_receiver: Receiver<EtwProcessEvent>,
+    dropped_events: Arc<AtomicU64>,
+}
+
+#[derive(Debug)]
+struct EtwProcessEvent {
+    kind: String,
+    pid: u32,
+    parent_pid: u32,
+    image: String,
+    command_line: String,
 }
 
 impl EtwProcessMonitor {
@@ -184,17 +207,33 @@ impl EtwProcessMonitor {
             detail: format!("Starting {}", helper.display()),
         }));
         let event_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (event_sender, event_receiver) = sync_channel(4_096);
+        let dropped_events = Arc::new(AtomicU64::new(0));
         if let Some(stdout) = child.stdout.take() {
-            spawn_etw_reader(stdout, Arc::clone(&state), Arc::clone(&event_count));
+            spawn_etw_reader(
+                stdout,
+                Arc::clone(&state),
+                Arc::clone(&event_count),
+                Some(event_sender),
+                Arc::clone(&dropped_events),
+            );
         }
         if let Some(stderr) = child.stderr.take() {
-            spawn_etw_reader(stderr, Arc::clone(&state), Arc::clone(&event_count));
+            spawn_etw_reader(
+                stderr,
+                Arc::clone(&state),
+                Arc::clone(&event_count),
+                None,
+                Arc::clone(&dropped_events),
+            );
         }
         Ok(Self {
             child,
             stop_event,
             state,
             event_count,
+            event_receiver,
+            dropped_events,
         })
     }
 
@@ -211,11 +250,19 @@ impl EtwProcessMonitor {
                 CoverageState::Limited
             },
             detail: format!(
-                "{}; {} process events observed",
+                "{}; {} process events observed; {} detailed events dropped and reconciled by polling",
                 state.detail,
-                self.event_count.load(Ordering::Relaxed)
+                self.event_count.load(Ordering::Relaxed),
+                self.dropped_events.load(Ordering::Relaxed)
             ),
         }
+    }
+
+    fn drain_events(&self, limit: usize) -> Vec<EtwProcessEvent> {
+        self.event_receiver
+            .try_iter()
+            .take(limit.clamp(1, 4_096))
+            .collect()
     }
 }
 
@@ -240,6 +287,8 @@ fn spawn_etw_reader(
     reader: impl Read + Send + 'static,
     state: Arc<Mutex<EtwMonitorState>>,
     event_count: Arc<std::sync::atomic::AtomicU64>,
+    event_sender: Option<SyncSender<EtwProcessEvent>>,
+    dropped_events: Arc<AtomicU64>,
 ) {
     let _ = thread::Builder::new()
         .name("OpenGuardETWReader".into())
@@ -254,6 +303,24 @@ fn spawn_etw_reader(
                     .is_some_and(|kind| matches!(kind, "start" | "stop"))
                 {
                     event_count.fetch_add(1, Ordering::Relaxed);
+                    if let Some(sender) = &event_sender {
+                        let event = EtwProcessEvent {
+                            kind: value["type"].as_str().unwrap_or_default().into(),
+                            pid: value["pid"]
+                                .as_u64()
+                                .and_then(|value| u32::try_from(value).ok())
+                                .unwrap_or_default(),
+                            parent_pid: value["parent_pid"]
+                                .as_u64()
+                                .and_then(|value| u32::try_from(value).ok())
+                                .unwrap_or_default(),
+                            image: value["image"].as_str().unwrap_or_default().into(),
+                            command_line: value["command_line"].as_str().unwrap_or_default().into(),
+                        };
+                        if sender.try_send(event).is_err() {
+                            dropped_events.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
                     continue;
                 }
                 if let Some(status) = value.get("status").and_then(serde_json::Value::as_str) {
@@ -368,6 +435,7 @@ fn run_windows_service() -> Result<()> {
 fn create_state(mode: &'static str, database_path: &Path) -> Result<ServiceState> {
     let database = Database::open(database_path)
         .with_context(|| format!("open native database at {}", database_path.display()))?;
+    recover_temporary_firewall_rules(&database)?;
     let state_root = database_path.parent().unwrap_or_else(|| Path::new("."));
     let updater = SecurityContentUpdater::new(state_root.join("SecurityContent"))
         .context("initialize signed security-content updater")?;
@@ -425,6 +493,12 @@ fn create_state(mode: &'static str, database_path: &Path) -> Result<ServiceState
         content_version,
         content_source,
         etw_monitor,
+        file_monitors: HashMap::new(),
+        persistence_cache: HashMap::new(),
+        realtime_scans: Arc::new(AtomicUsize::new(0)),
+        active_processes: HashMap::new(),
+        active_network: HashMap::new(),
+        snapshot_baselined: false,
     })
 }
 
@@ -504,6 +578,7 @@ fn serve_connection(state: &mut ServiceState) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn handle_request(
     state: &mut ServiceState,
     client: &ClientContext,
@@ -515,14 +590,17 @@ fn handle_request(
             service_version: env!("CARGO_PKG_VERSION").into(),
         }),
         Request::GetHealth => Ok(ResponseData::Health(state.health())),
-        Request::GetSnapshot => state
-            .collect_snapshot(&client.sid)
-            .map(ResponseData::Snapshot)
-            .map_err(|error| ApiError {
-                code: ErrorCode::LimitedCoverage,
-                message: error.to_string(),
-                retryable: true,
-            }),
+        Request::GetSnapshot => {
+            state.drain_etw_activity();
+            state.drain_file_activity(client);
+            state.collect_snapshot(&client.sid)
+        }
+        .map(ResponseData::Snapshot)
+        .map_err(|error| ApiError {
+            code: ErrorCode::LimitedCoverage,
+            message: error.to_string(),
+            retryable: true,
+        }),
         Request::RecentEvents { limit } => state
             .database
             .recent_events(&client.sid, limit)
@@ -532,6 +610,33 @@ fn handle_request(
                 message: error.to_string(),
                 retryable: true,
             }),
+        Request::GetTimeline {
+            before_id,
+            limit,
+            category,
+            process_id,
+            search,
+        } => {
+            state.drain_file_activity(client);
+            state
+                .database
+                .timeline(
+                    &client.sid,
+                    before_id,
+                    limit,
+                    category.as_deref(),
+                    process_id,
+                    search.as_deref(),
+                )
+                .map(ResponseData::Timeline)
+                .map_err(storage_api_error("Read investigation timeline"))
+        }
+        Request::GetPersistence { refresh } => state
+            .persistence_inventory(client, refresh)
+            .map(ResponseData::Persistence),
+        Request::ExecuteResponse { request } => state
+            .execute_response(client, &request)
+            .map(ResponseData::ResponseAction),
         Request::StartScan { target, profile } => state
             .start_scan(client, &target, profile)
             .map(|scan_id| ResponseData::ScanStarted { scan_id }),
@@ -1051,11 +1156,642 @@ impl ServiceState {
         Ok(())
     }
 
+    fn drain_etw_activity(&self) {
+        let Some(monitor) = &self.etw_monitor else {
+            return;
+        };
+        for event in monitor.drain_events(2_048) {
+            if event.pid == 0 {
+                continue;
+            }
+            let action = if event.kind == "start" {
+                "started"
+            } else {
+                "stopped"
+            };
+            let mut detail = if event.kind == "start" {
+                format!("Parent PID {}", event.parent_pid)
+            } else {
+                "Process stop event from Microsoft-Windows-Kernel-Process".into()
+            };
+            if !event.command_line.is_empty() {
+                detail.push_str(" · Command line: ");
+                detail.push_str(&event.command_line);
+            }
+            let timeline = TimelineEvent {
+                id: None,
+                category: "process".into(),
+                action: action.into(),
+                severity: Severity::Info,
+                title: format!("Process {action}: PID {}", event.pid),
+                detail,
+                process_id: Some(event.pid),
+                path: event.image,
+                remote_address: String::new(),
+                correlation_id: Uuid::new_v4().simple().to_string(),
+                occurred_at: unix_timestamp(),
+            };
+            if let Err(error) = self.database.record_timeline("", &timeline) {
+                tracing::warn!(error = %error, "persist ETW process event failed");
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn record_snapshot_transitions(&mut self, owner_sid: &str, snapshot: &SystemSnapshot) {
+        let processes = snapshot
+            .processes
+            .iter()
+            .map(|process| (process.pid, process.path.clone()))
+            .collect::<HashMap<_, _>>();
+        let endpoints = snapshot
+            .endpoints
+            .iter()
+            .filter(|endpoint| endpoint.remote_port != 0)
+            .map(|endpoint| (network_timeline_key(endpoint), endpoint.clone()))
+            .collect::<HashMap<_, _>>();
+        if !self.snapshot_baselined {
+            self.active_processes = processes;
+            self.active_network = endpoints;
+            self.snapshot_baselined = true;
+            return;
+        }
+        if self.etw_monitor.is_none() {
+            for process in &snapshot.processes {
+                if self.active_processes.get(&process.pid) == Some(&process.path) {
+                    continue;
+                }
+                let timeline = TimelineEvent {
+                    id: None,
+                    category: "process".into(),
+                    action: "started".into(),
+                    severity: process.risk.severity,
+                    title: format!("Process appeared: {}", process.name),
+                    detail: format!(
+                        "Parent PID {} · command line unavailable in polling fallback",
+                        process.parent_pid
+                    ),
+                    process_id: Some(process.pid),
+                    path: process.path.clone(),
+                    remote_address: String::new(),
+                    correlation_id: Uuid::new_v4().simple().to_string(),
+                    occurred_at: snapshot.captured_at.clone(),
+                };
+                let _ = self.database.record_timeline(owner_sid, &timeline);
+            }
+            for (pid, path) in &self.active_processes {
+                if !processes.contains_key(pid) {
+                    let timeline = TimelineEvent {
+                        id: None,
+                        category: "process".into(),
+                        action: "stopped".into(),
+                        severity: Severity::Info,
+                        title: format!("Process exited: PID {pid}"),
+                        detail: "Detected by bounded process snapshot reconciliation".into(),
+                        process_id: Some(*pid),
+                        path: path.clone(),
+                        remote_address: String::new(),
+                        correlation_id: Uuid::new_v4().simple().to_string(),
+                        occurred_at: snapshot.captured_at.clone(),
+                    };
+                    let _ = self.database.record_timeline(owner_sid, &timeline);
+                }
+            }
+        }
+        for (key, endpoint) in &endpoints {
+            if self.active_network.contains_key(key) {
+                continue;
+            }
+            let severity = match endpoint.reputation.as_str() {
+                "malicious" => Severity::High,
+                "suspicious" => Severity::Medium,
+                _ => Severity::Info,
+            };
+            let destination = if endpoint.remote_hostname.is_empty() {
+                endpoint.remote_address.clone()
+            } else {
+                format!("{} ({})", endpoint.remote_hostname, endpoint.remote_address)
+            };
+            let timeline = TimelineEvent {
+                id: None,
+                category: "network".into(),
+                action: "connected".into(),
+                severity,
+                title: format!("{} opened a network flow", endpoint.process_name),
+                detail: format!(
+                    "{} {}:{} · state {} · reputation {}",
+                    endpoint.protocol,
+                    destination,
+                    endpoint.remote_port,
+                    endpoint.state,
+                    endpoint.reputation
+                ),
+                process_id: Some(endpoint.pid),
+                path: endpoint.process_path.clone(),
+                remote_address: endpoint.remote_address.clone(),
+                correlation_id: Uuid::new_v4().simple().to_string(),
+                occurred_at: snapshot.captured_at.clone(),
+            };
+            let _ = self.database.record_timeline(owner_sid, &timeline);
+        }
+        for (key, endpoint) in &self.active_network {
+            if !endpoints.contains_key(key) {
+                let timeline = TimelineEvent {
+                    id: None,
+                    category: "network".into(),
+                    action: "closed".into(),
+                    severity: Severity::Info,
+                    title: format!("{} network flow closed", endpoint.process_name),
+                    detail: format!(
+                        "{} {}:{}",
+                        endpoint.protocol, endpoint.remote_address, endpoint.remote_port
+                    ),
+                    process_id: Some(endpoint.pid),
+                    path: endpoint.process_path.clone(),
+                    remote_address: endpoint.remote_address.clone(),
+                    correlation_id: Uuid::new_v4().simple().to_string(),
+                    occurred_at: snapshot.captured_at.clone(),
+                };
+                let _ = self.database.record_timeline(owner_sid, &timeline);
+            }
+        }
+        self.active_processes = processes;
+        self.active_network = endpoints;
+    }
+
+    fn drain_file_activity(&mut self, client: &ClientContext) {
+        if self.mode == "test" {
+            return;
+        }
+        if !self.file_monitors.contains_key(&client.sid) {
+            let mut roots = Vec::new();
+            for folder in [
+                &FOLDERID_Downloads,
+                &FOLDERID_Desktop,
+                &FOLDERID_Startup,
+                &FOLDERID_CommonStartup,
+            ] {
+                if let Ok(path) = known_folder_path(folder, client.token.as_ref()) {
+                    roots.push(path);
+                }
+            }
+            if let Ok(local) = known_folder_path(&FOLDERID_LocalAppData, client.token.as_ref()) {
+                roots.push(local.join("Temp"));
+            }
+            match FileMonitor::start(roots) {
+                Ok(monitor) => {
+                    self.file_monitors.insert(client.sid.clone(), monitor);
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, owner = %client.sid, "file monitor unavailable");
+                    return;
+                }
+            }
+        }
+        let Some(monitor) = self.file_monitors.get_mut(&client.sid) else {
+            return;
+        };
+        let snapshot = monitor.drain(512);
+        if snapshot.reconciled {
+            let detail = format!(
+                "File notification gap reconciled by bounded subtree enumeration; dropped={}, journal_changed={}",
+                snapshot.dropped, snapshot.journal_changed
+            );
+            let event = TimelineEvent {
+                id: None,
+                category: "system".into(),
+                action: "file_monitor_reconciled".into(),
+                severity: Severity::Medium,
+                title: "File monitor gap reconciled".into(),
+                detail,
+                process_id: None,
+                path: String::new(),
+                remote_address: String::new(),
+                correlation_id: format!("file-gap:{}:{}", client.sid, unix_timestamp()),
+                occurred_at: unix_timestamp(),
+            };
+            if let Err(error) = self.database.record_timeline(&client.sid, &event) {
+                tracing::warn!(error = %error, "persist file-monitor reconciliation failed");
+            }
+        }
+        for activity in snapshot.events {
+            let path = activity.path.display().to_string();
+            let key = format!(
+                "file:{}:{}:{}:{}",
+                client.sid,
+                activity.action,
+                normalized_path_key(&activity.path),
+                activity.observed_at
+            );
+            if !self.reported_processes.insert(key) {
+                continue;
+            }
+            let interesting = realtime_scan_candidate(&activity.path);
+            let severity = if interesting {
+                Severity::Low
+            } else {
+                Severity::Info
+            };
+            let event = TimelineEvent {
+                id: None,
+                category: "file".into(),
+                action: activity.action.clone(),
+                severity,
+                title: format!("File {}", activity.action),
+                detail: format!("Observed by {}", activity.source),
+                process_id: None,
+                path: path.clone(),
+                remote_address: String::new(),
+                correlation_id: Uuid::new_v4().simple().to_string(),
+                occurred_at: activity.observed_at.clone(),
+            };
+            if let Err(error) = self.database.record_timeline(&client.sid, &event) {
+                tracing::warn!(error = %error, path = %path, "persist file activity failed");
+            }
+            if interesting && activity.action != "removed" {
+                self.schedule_realtime_scan(&client.sid, activity.path);
+            }
+        }
+        if self.reported_processes.len() > 100_000 {
+            self.reported_processes.clear();
+        }
+    }
+
+    fn schedule_realtime_scan(&self, owner_sid: &str, path: PathBuf) {
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            return;
+        };
+        if !metadata.is_file() || metadata.len() > 64 * 1024 * 1024 {
+            return;
+        }
+        if self
+            .realtime_scans
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < 2).then_some(active + 1)
+            })
+            .is_err()
+        {
+            return;
+        }
+        let scanner = Arc::clone(&self.scanner);
+        let database = self.database.clone();
+        let owner_sid = owner_sid.to_owned();
+        let active = Arc::clone(&self.realtime_scans);
+        let _ = thread::Builder::new()
+            .name("OpenGuardRealtimeScan".into())
+            .spawn(move || {
+                let cancelled = AtomicBool::new(false);
+                let result = scanner.scan_file(&path, &cancelled);
+                if let Ok(finding) = result {
+                    let excluded = database
+                        .path_excluded(&owner_sid, &normalized_path_key(&path))
+                        .unwrap_or(false);
+                    let allowed = database
+                        .allowed_hash(&owner_sid, &finding.sha256)
+                        .ok()
+                        .flatten()
+                        .is_some();
+                    if !excluded && !allowed {
+                        let _ = database.record_scan(&owner_sid, &finding);
+                        if matches!(
+                            finding.verdict,
+                            ScanVerdict::Suspicious | ScanVerdict::Malicious
+                        ) {
+                            let event = SecurityEvent {
+                                id: None,
+                                event_type: "realtime_file_detection".into(),
+                                severity: Severity::from_score(finding.score),
+                                title: "Real-time file detection needs review".into(),
+                                detail: finding.reasons.join("; "),
+                                process_id: None,
+                                path: finding.path,
+                                created_at: finding.scanned_at,
+                                resolved: false,
+                            };
+                            let _ = database.record_event(&owner_sid, &event);
+                        }
+                    }
+                }
+                active.fetch_sub(1, Ordering::AcqRel);
+            });
+    }
+
+    fn persistence_inventory(
+        &mut self,
+        client: &ClientContext,
+        refresh: bool,
+    ) -> Result<PersistenceInventory, ApiError> {
+        if !refresh && let Some(cached) = self.persistence_cache.get(&client.sid) {
+            return Ok(cached.clone());
+        }
+        let context = PersistenceContext {
+            owner_sid: client.sid.clone(),
+            user_profile: known_folder_path(&FOLDERID_Profile, client.token.as_ref())
+                .unwrap_or_default(),
+            local_app_data: known_folder_path(&FOLDERID_LocalAppData, client.token.as_ref())
+                .unwrap_or_default(),
+            roaming_app_data: known_folder_path(&FOLDERID_RoamingAppData, client.token.as_ref())
+                .unwrap_or_default(),
+        };
+        let inventory = collect_persistence(&context);
+        self.database
+            .sync_persistence_inventory(&client.sid, &inventory.items, &inventory.collected_at)
+            .map_err(storage_api_error("Persist persistence inventory"))?;
+        self.persistence_cache
+            .insert(client.sid.clone(), inventory.clone());
+        Ok(inventory)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn execute_response(
+        &mut self,
+        client: &ClientContext,
+        request: &ResponseActionRequest,
+    ) -> Result<ResponseActionResult, ApiError> {
+        let action_name = response_action_name(request.action);
+        if !bounded_response_field(&request.expected_path, 32_768)
+            || !bounded_response_field(&request.target, 32_768)
+            || !bounded_response_field(&request.remote_address, 128)
+            || !bounded_response_field(&request.persistence_id, 256)
+            || !bounded_response_field(&request.rollback_id, 128)
+            || !bounded_response_field(&request.confirmation, 64)
+        {
+            let error = invalid_response("Response target fields exceed the IPC safety limits");
+            self.audit_response_failure(client, action_name, request, &error.message);
+            return Err(error);
+        }
+        if request.confirmation != format!("confirm:{action_name}") {
+            let error = ApiError {
+                code: ErrorCode::Forbidden,
+                message: "Response action requires an explicit matching confirmation".into(),
+                retryable: false,
+            };
+            self.audit_response_failure(client, action_name, request, &error.message);
+            return Err(error);
+        }
+        let response = self.execute_response_inner(client, request);
+        let (target, outcome, rollback_id, expires_at) = match response {
+            Ok(value) => value,
+            Err(error) => {
+                self.audit_response_failure(client, action_name, request, &error.message);
+                return Err(error);
+            }
+        };
+        let event = TimelineEvent {
+            id: None,
+            category: "response".into(),
+            action: action_name.into(),
+            severity: Severity::Info,
+            title: "User-confirmed response completed".into(),
+            detail: outcome.clone(),
+            process_id: request.process_id,
+            path: request.expected_path.clone(),
+            remote_address: request.remote_address.clone(),
+            correlation_id: rollback_id
+                .clone()
+                .unwrap_or_else(|| Uuid::new_v4().simple().to_string()),
+            occurred_at: unix_timestamp(),
+        };
+        let audit_event_id = self
+            .database
+            .record_timeline(&client.sid, &event)
+            .map_err(storage_api_error("Audit response action"))?;
+        Ok(ResponseActionResult {
+            action: request.action,
+            target,
+            outcome,
+            rollback_id,
+            expires_at,
+            audit_event_id,
+        })
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn execute_response_inner(
+        &mut self,
+        client: &ClientContext,
+        request: &ResponseActionRequest,
+    ) -> Result<(String, String, Option<String>, Option<String>), ApiError> {
+        match request.action {
+            ResponseActionKind::TerminateProcess
+            | ResponseActionKind::SuspendProcess
+            | ResponseActionKind::ResumeProcess => {
+                let pid = request
+                    .process_id
+                    .ok_or_else(|| invalid_response("A process ID is required"))?;
+                let path = PathBuf::from(&request.expected_path);
+                let action = match request.action {
+                    ResponseActionKind::TerminateProcess => "terminate",
+                    ResponseActionKind::SuspendProcess => "suspend",
+                    ResponseActionKind::ResumeProcess => "resume",
+                    _ => unreachable!(),
+                };
+                let result = control_process(action, pid, &path).map_err(response_api_error)?;
+                Ok((format!("PID {pid}"), result.detail, None, None))
+            }
+            ResponseActionKind::QuarantineFile => {
+                let path = PathBuf::from(&request.target);
+                let finding = self
+                    .scanner
+                    .scan_file(&path, &AtomicBool::new(false))
+                    .map_err(|error| ApiError {
+                        code: ErrorCode::Conflict,
+                        message: format!("Scan before quarantine: {error}"),
+                        retryable: false,
+                    })?;
+                if !matches!(
+                    finding.verdict,
+                    ScanVerdict::Suspicious | ScanVerdict::Malicious
+                ) {
+                    return Err(ApiError {
+                        code: ErrorCode::Conflict,
+                        message: "OpenGuard only quarantines files currently detected as suspicious or malicious".into(),
+                        retryable: false,
+                    });
+                }
+                let record = self.quarantine_finding(client, &finding)?;
+                Ok((
+                    record.original_path,
+                    format!("Quarantined as {}", record.id),
+                    Some(record.id),
+                    None,
+                ))
+            }
+            ResponseActionKind::BlockRemoteAddress => {
+                let duration = request.duration_minutes.unwrap_or(15).clamp(1, 1_440);
+                let rollback_id = Uuid::new_v4().simple().to_string();
+                let rule_name = format!("OpenGuard Temporary Block {rollback_id}");
+                let program =
+                    (!request.expected_path.is_empty()).then(|| Path::new(&request.expected_path));
+                block_remote_address(&rule_name, &request.remote_address, program)
+                    .map_err(response_api_error)?;
+                let expires_seconds = unix_seconds().saturating_add(u64::from(duration) * 60);
+                let expires_at = format!("unix:{expires_seconds}");
+                let rollback = ResponseRollback {
+                    id: rollback_id.clone(),
+                    action: "block_remote_address".into(),
+                    target: request.remote_address.clone(),
+                    payload: rule_name.clone(),
+                    created_at: unix_timestamp(),
+                    expires_at: Some(expires_at.clone()),
+                    restored_at: None,
+                };
+                self.database
+                    .record_response_rollback(&client.sid, &rollback)
+                    .map_err(storage_api_error("Record firewall rollback"))?;
+                schedule_firewall_expiry(
+                    self.database.clone(),
+                    client.sid.clone(),
+                    rollback_id.clone(),
+                    rule_name,
+                    u64::from(duration) * 60,
+                );
+                Ok((
+                    request.remote_address.clone(),
+                    format!("Blocked outbound traffic for {duration} minutes"),
+                    Some(rollback_id),
+                    Some(expires_at),
+                ))
+            }
+            ResponseActionKind::UnblockRemoteAddress => {
+                let rollback = self
+                    .database
+                    .response_rollback(&client.sid, &request.rollback_id)
+                    .map_err(storage_api_error("Read firewall rollback"))?
+                    .filter(|value| value.action == "block_remote_address")
+                    .ok_or_else(|| invalid_response("Active firewall rollback was not found"))?;
+                remove_firewall_rule(&rollback.payload).map_err(response_api_error)?;
+                self.database
+                    .mark_response_restored(&client.sid, &rollback.id, &unix_timestamp())
+                    .map_err(storage_api_error("Complete firewall rollback"))?;
+                Ok((
+                    rollback.target,
+                    "Removed temporary outbound block".into(),
+                    None,
+                    None,
+                ))
+            }
+            ResponseActionKind::DisablePersistence => {
+                let _ = self.persistence_inventory(client, false)?;
+                let item = self
+                    .database
+                    .persistence_item(&client.sid, &request.persistence_id)
+                    .map_err(storage_api_error("Read persistence target"))?
+                    .ok_or_else(|| invalid_response("Active persistence target was not found"))?;
+                if item.response_capability != "disable_restore" {
+                    return Err(invalid_response(
+                        "This persistence type is report-only for safety",
+                    ));
+                }
+                if item.risk < Severity::Medium {
+                    return Err(invalid_response(
+                        "OpenGuard only enables automated startup disable for entries with explainable review signals",
+                    ));
+                }
+                set_persistence_enabled(&item.category, &item.location, false, None)
+                    .map_err(response_api_error)?;
+                let rollback_id = Uuid::new_v4().simple().to_string();
+                let payload = serde_json::json!({
+                    "category": item.category,
+                    "location": item.location,
+                    "previous_state": item.state,
+                })
+                .to_string();
+                self.database
+                    .record_response_rollback(
+                        &client.sid,
+                        &ResponseRollback {
+                            id: rollback_id.clone(),
+                            action: "disable_persistence".into(),
+                            target: item.name.clone(),
+                            payload,
+                            created_at: unix_timestamp(),
+                            expires_at: None,
+                            restored_at: None,
+                        },
+                    )
+                    .map_err(storage_api_error("Record persistence rollback"))?;
+                self.persistence_cache.remove(&client.sid);
+                Ok((
+                    item.name,
+                    "Disabled startup registration; rollback is available".into(),
+                    Some(rollback_id),
+                    None,
+                ))
+            }
+            ResponseActionKind::RestorePersistence => {
+                let rollback = self
+                    .database
+                    .response_rollback(&client.sid, &request.rollback_id)
+                    .map_err(storage_api_error("Read persistence rollback"))?
+                    .filter(|value| value.action == "disable_persistence")
+                    .ok_or_else(|| invalid_response("Active persistence rollback was not found"))?;
+                let payload: serde_json::Value = serde_json::from_str(&rollback.payload)
+                    .map_err(|_| invalid_response("Stored rollback data is invalid"))?;
+                let category = payload["category"].as_str().unwrap_or_default();
+                let location = payload["location"].as_str().unwrap_or_default();
+                let previous = payload["previous_state"].as_str();
+                set_persistence_enabled(category, location, true, previous)
+                    .map_err(response_api_error)?;
+                self.database
+                    .mark_response_restored(&client.sid, &rollback.id, &unix_timestamp())
+                    .map_err(storage_api_error("Complete persistence rollback"))?;
+                self.persistence_cache.remove(&client.sid);
+                Ok((
+                    rollback.target,
+                    "Restored startup registration".into(),
+                    None,
+                    None,
+                ))
+            }
+        }
+    }
+
+    fn audit_response_failure(
+        &self,
+        client: &ClientContext,
+        action: &str,
+        request: &ResponseActionRequest,
+        message: &str,
+    ) {
+        let event = TimelineEvent {
+            id: None,
+            category: "response".into(),
+            action: format!("{action}_failed"),
+            severity: Severity::Medium,
+            title: "Response action rejected or failed".into(),
+            detail: message.into(),
+            process_id: request.process_id,
+            path: request.expected_path.clone(),
+            remote_address: request.remote_address.clone(),
+            correlation_id: Uuid::new_v4().simple().to_string(),
+            occurred_at: unix_timestamp(),
+        };
+        let _ = self.database.record_timeline(&client.sid, &event);
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn collect_snapshot(
         &mut self,
         owner_sid: &str,
     ) -> Result<openguard_domain::SystemSnapshot, openguard_windows::WindowsError> {
         let mut snapshot = self.collector.snapshot()?;
+        self.record_snapshot_transitions(owner_sid, &snapshot);
+        snapshot.coverage.push(self.file_monitors.get(owner_sid).map_or_else(
+            || CoverageNote {
+                source: "realtime_file_monitor".into(),
+                state: CoverageState::Limited,
+                detail: "Per-user file monitoring has not initialized for this session".into(),
+            },
+            |monitor| CoverageNote {
+                source: "realtime_file_monitor".into(),
+                state: CoverageState::Active,
+                detail: format!(
+                    "ReadDirectoryChangesW monitoring is active on {} user-writable roots with USN gap checks and bounded reconciliation",
+                    monitor.roots().len()
+                ),
+            },
+        ));
         match self.apply_executable_baseline(owner_sid, &mut snapshot) {
             Ok(initialized_now) => snapshot.coverage.push(CoverageNote {
                 source: "executable_baseline".into(),
@@ -1592,6 +2328,25 @@ impl ServiceState {
                     },
                     EtwProcessMonitor::coverage,
                 ),
+                CoverageNote {
+                    source: "investigation_timeline".into(),
+                    state: CoverageState::Active,
+                    detail: "Owner-scoped cursor-paginated process, file, network, persistence, detection, and response history is active".into(),
+                },
+                CoverageNote {
+                    source: "persistence_inventory".into(),
+                    state: if self.persistence_cache.is_empty() {
+                        CoverageState::Unknown
+                    } else {
+                        CoverageState::Active
+                    },
+                    detail: "Services, drivers, scheduled tasks, WMI consumers, Run keys, and browser extensions are inventoried on demand".into(),
+                },
+                CoverageNote {
+                    source: "confirmed_response".into(),
+                    state: CoverageState::Active,
+                    detail: "Identity-revalidated process control, recoverable quarantine, reversible startup disable, and temporary outbound blocking require explicit user confirmation and are audited".into(),
+                },
             ],
         }
     }
@@ -1719,12 +2474,148 @@ fn hash_copy(source: &mut impl Read, destination: &mut impl Write) -> Result<Str
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn unix_timestamp() -> String {
-    let seconds = SystemTime::now()
+fn realtime_scan_candidate(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "exe"
+                    | "dll"
+                    | "sys"
+                    | "scr"
+                    | "com"
+                    | "cpl"
+                    | "msi"
+                    | "ps1"
+                    | "psm1"
+                    | "bat"
+                    | "cmd"
+                    | "js"
+                    | "jse"
+                    | "vbs"
+                    | "vbe"
+                    | "hta"
+                    | "lnk"
+            )
+        })
+}
+
+fn network_timeline_key(endpoint: &NetworkEndpoint) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{}",
+        endpoint.protocol,
+        endpoint.pid,
+        endpoint.local_address,
+        endpoint.local_port,
+        endpoint.remote_address,
+        endpoint.remote_port
+    )
+}
+
+const fn response_action_name(action: ResponseActionKind) -> &'static str {
+    match action {
+        ResponseActionKind::TerminateProcess => "terminate_process",
+        ResponseActionKind::SuspendProcess => "suspend_process",
+        ResponseActionKind::ResumeProcess => "resume_process",
+        ResponseActionKind::QuarantineFile => "quarantine_file",
+        ResponseActionKind::BlockRemoteAddress => "block_remote_address",
+        ResponseActionKind::UnblockRemoteAddress => "unblock_remote_address",
+        ResponseActionKind::DisablePersistence => "disable_persistence",
+        ResponseActionKind::RestorePersistence => "restore_persistence",
+    }
+}
+
+fn invalid_response(message: &str) -> ApiError {
+    ApiError {
+        code: ErrorCode::InvalidRequest,
+        message: message.into(),
+        retryable: false,
+    }
+}
+
+fn bounded_response_field(value: &str, maximum: usize) -> bool {
+    value.len() <= maximum && !value.contains(['\0', '\r', '\n'])
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn response_api_error(error: openguard_windows::WindowsError) -> ApiError {
+    ApiError {
+        code: ErrorCode::Conflict,
+        message: error.to_string(),
+        retryable: false,
+    }
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    format!("unix:{seconds}")
+        .as_secs()
+}
+
+fn unix_timestamp() -> String {
+    format!("unix:{}", unix_seconds())
+}
+
+fn recover_temporary_firewall_rules(database: &Database) -> Result<()> {
+    for owned in database.active_response_rollbacks("block_remote_address")? {
+        let expires = owned
+            .rollback
+            .expires_at
+            .as_deref()
+            .and_then(|value| value.strip_prefix("unix:"))
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0);
+        schedule_firewall_expiry(
+            database.clone(),
+            owned.owner_sid,
+            owned.rollback.id,
+            owned.rollback.payload,
+            expires.saturating_sub(unix_seconds()),
+        );
+    }
+    Ok(())
+}
+
+fn schedule_firewall_expiry(
+    database: Database,
+    owner_sid: String,
+    rollback_id: String,
+    rule_name: String,
+    delay_seconds: u64,
+) {
+    let _ = thread::Builder::new()
+        .name("OpenGuardFirewallExpiry".into())
+        .spawn(move || {
+            if delay_seconds > 0 {
+                thread::sleep(std::time::Duration::from_secs(delay_seconds));
+            }
+            let active = database
+                .response_rollback(&owner_sid, &rollback_id)
+                .ok()
+                .flatten()
+                .is_some();
+            if !active {
+                return;
+            }
+            match remove_firewall_rule(&rule_name) {
+                Ok(()) => {
+                    let _ = database.mark_response_restored(
+                        &owner_sid,
+                        &rollback_id,
+                        &unix_timestamp(),
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        rollback_id = %rollback_id,
+                        "temporary firewall rule cleanup failed"
+                    );
+                }
+            }
+        });
 }
 
 fn normalized_path_key(path: &Path) -> String {
@@ -1985,7 +2876,7 @@ fn default_database_path(console: bool) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openguard_domain::{Request, Response};
+    use openguard_domain::{Request, Response, ResponseActionKind, ResponseActionRequest};
     use tempfile::TempDir;
 
     fn state(directory: &TempDir) -> ServiceState {
@@ -2003,6 +2894,12 @@ mod tests {
             content_version: "bundled-test".into(),
             content_source: "bundled".into(),
             etw_monitor: None,
+            file_monitors: HashMap::new(),
+            persistence_cache: HashMap::new(),
+            realtime_scans: Arc::new(AtomicUsize::new(0)),
+            active_processes: HashMap::new(),
+            active_network: HashMap::new(),
+            snapshot_baselined: false,
         }
     }
 
@@ -2101,6 +2998,43 @@ mod tests {
             panic!("expected snapshot response")
         };
         assert!(!snapshot.processes.is_empty());
+    }
+
+    #[test]
+    fn response_actions_fail_closed_without_matching_confirmation_and_are_audited() {
+        let directory = TempDir::new().expect("temporary directory");
+        let mut state = state(&directory);
+        let client = test_client();
+        let response = handle_request(
+            &mut state,
+            &client,
+            RequestEnvelope::new(
+                "response-confirmation",
+                Request::ExecuteResponse {
+                    request: ResponseActionRequest {
+                        action: ResponseActionKind::TerminateProcess,
+                        process_id: Some(std::process::id()),
+                        expected_path: std::env::current_exe().unwrap().display().to_string(),
+                        target: String::new(),
+                        remote_address: String::new(),
+                        duration_minutes: None,
+                        persistence_id: String::new(),
+                        rollback_id: String::new(),
+                        confirmation: String::new(),
+                    },
+                },
+            ),
+        );
+        let Response::Error { error } = response.body else {
+            panic!("unconfirmed response must fail")
+        };
+        assert_eq!(error.code, ErrorCode::Forbidden);
+        let timeline = state
+            .database
+            .timeline(&client.sid, None, 10, Some("response"), None, None)
+            .unwrap();
+        assert_eq!(timeline.events.len(), 1);
+        assert_eq!(timeline.events[0].action, "terminate_process_failed");
     }
 
     #[test]

@@ -168,6 +168,97 @@ pub struct SecurityEvent {
     pub resolved: bool,
 }
 
+/// One normalized historical observation shown in the investigation timeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineEvent {
+    pub id: Option<i64>,
+    pub category: String,
+    pub action: String,
+    pub severity: Severity,
+    pub title: String,
+    pub detail: String,
+    pub process_id: Option<u32>,
+    pub path: String,
+    pub remote_address: String,
+    pub correlation_id: String,
+    pub occurred_at: String,
+}
+
+/// Cursor-paginated timeline result. `next_before_id` is passed to the next query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelinePage {
+    pub events: Vec<TimelineEvent>,
+    pub next_before_id: Option<i64>,
+}
+
+/// A startup mechanism discovered by the native service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistenceItem {
+    pub id: String,
+    pub category: String,
+    pub name: String,
+    pub command: String,
+    pub location: String,
+    pub state: String,
+    pub risk: Severity,
+    pub evidence: Vec<String>,
+    pub detected_at: String,
+    pub response_capability: String,
+}
+
+/// Current persistence inventory plus honest per-source coverage notes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersistenceInventory {
+    pub items: Vec<PersistenceItem>,
+    pub collected_at: String,
+    pub coverage: Vec<CoverageNote>,
+}
+
+/// Explicit response operation selected by a local authenticated user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseActionKind {
+    TerminateProcess,
+    SuspendProcess,
+    ResumeProcess,
+    QuarantineFile,
+    BlockRemoteAddress,
+    UnblockRemoteAddress,
+    DisablePersistence,
+    RestorePersistence,
+}
+
+/// Narrow, identity-bound request for a privileged response operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseActionRequest {
+    pub action: ResponseActionKind,
+    pub process_id: Option<u32>,
+    pub expected_path: String,
+    pub target: String,
+    pub remote_address: String,
+    pub duration_minutes: Option<u32>,
+    pub persistence_id: String,
+    pub rollback_id: String,
+    pub confirmation: String,
+}
+
+/// Auditable result returned after a privileged response operation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseActionResult {
+    pub action: ResponseActionKind,
+    pub target: String,
+    pub outcome: String,
+    pub rollback_id: Option<String>,
+    pub expires_at: Option<String>,
+    pub audit_event_id: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScanFinding {

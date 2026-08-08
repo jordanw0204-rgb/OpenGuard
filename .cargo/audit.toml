@@ -1,0 +1,9 @@
+[advisories]
+# YARA-X 1.19.0 is the current release and owns this transitive Wasmtime
+# dependency. RUSTSEC-2026-0222 requires two Wasmtime engines to mix type
+# indices; YARA-X creates one engine, so its maintainers confirmed it is not
+# affected (VirusTotal/yara-x#726). Remove this exception when YARA-X moves to
+# a Wasmtime release containing the upstream fix.
+ignore = ["RUSTSEC-2026-0222"]
+informational_warnings = ["unmaintained"]
+severity_threshold = "low"

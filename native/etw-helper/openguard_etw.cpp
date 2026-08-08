@@ -4,7 +4,9 @@
 #include <evntcons.h>
 #include <tdh.h>
 
+#include <cstring>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -55,6 +57,112 @@ ULONG EventProcessId(PEVENT_RECORD event) {
     return event->EventHeader.ProcessId;
 }
 
+std::vector<BYTE> EventProperty(PEVENT_RECORD event, const wchar_t* requested_name) {
+    ULONG info_size = 0;
+    if (TdhGetEventInformation(event, 0, nullptr, nullptr, &info_size) != ERROR_INSUFFICIENT_BUFFER) {
+        return {};
+    }
+    std::vector<BYTE> info_storage(info_size);
+    auto info = reinterpret_cast<PTRACE_EVENT_INFO>(info_storage.data());
+    if (TdhGetEventInformation(event, 0, nullptr, info, &info_size) != ERROR_SUCCESS) {
+        return {};
+    }
+    for (ULONG index = 0; index < info->TopLevelPropertyCount; ++index) {
+        auto& property = info->EventPropertyInfoArray[index];
+        auto name = reinterpret_cast<PCWSTR>(info_storage.data() + property.NameOffset);
+        if (_wcsicmp(name, requested_name) != 0) {
+            continue;
+        }
+        PROPERTY_DATA_DESCRIPTOR descriptor{};
+        descriptor.PropertyName = reinterpret_cast<ULONGLONG>(name);
+        descriptor.ArrayIndex = ULONG_MAX;
+        ULONG value_size = 0;
+        if (TdhGetPropertySize(event, 0, nullptr, 1, &descriptor, &value_size) != ERROR_SUCCESS ||
+            value_size == 0 || value_size > 64 * 1024) {
+            return {};
+        }
+        std::vector<BYTE> value(value_size);
+        if (TdhGetProperty(event, 0, nullptr, 1, &descriptor, value_size, value.data()) ==
+            ERROR_SUCCESS) {
+            return value;
+        }
+    }
+    return {};
+}
+
+ULONG EventUlong(PEVENT_RECORD event, const wchar_t* name) {
+    const auto value = EventProperty(event, name);
+    if (value.size() >= sizeof(ULONG)) {
+        ULONG result = 0;
+        memcpy(&result, value.data(), sizeof(result));
+        return result;
+    }
+    return 0;
+}
+
+std::string Utf8(const std::wstring& value) {
+    if (value.empty()) {
+        return {};
+    }
+    const int size = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+                                         nullptr, 0, nullptr, nullptr);
+    if (size <= 0) {
+        return {};
+    }
+    std::string result(size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(),
+                        size, nullptr, nullptr);
+    return result;
+}
+
+std::string EventText(PEVENT_RECORD event, const wchar_t* name) {
+    const auto value = EventProperty(event, name);
+    if (value.empty()) {
+        return {};
+    }
+    if (value.size() >= sizeof(wchar_t) && value.size() % sizeof(wchar_t) == 0) {
+        const auto wide = reinterpret_cast<const wchar_t*>(value.data());
+        const size_t count = value.size() / sizeof(wchar_t);
+        size_t length = 0;
+        while (length < count && wide[length] != L'\0') {
+            ++length;
+        }
+        const std::string decoded = Utf8(std::wstring(wide, length));
+        if (!decoded.empty()) {
+            return decoded;
+        }
+    }
+    const auto text = reinterpret_cast<const char*>(value.data());
+    size_t length = 0;
+    while (length < value.size() && text[length] != '\0') {
+        ++length;
+    }
+    return std::string(text, length);
+}
+
+std::string JsonEscape(const std::string& value) {
+    std::ostringstream output;
+    for (const unsigned char character : value) {
+        switch (character) {
+            case '\\': output << "\\\\"; break;
+            case '"': output << "\\\""; break;
+            case '\b': output << "\\b"; break;
+            case '\f': output << "\\f"; break;
+            case '\n': output << "\\n"; break;
+            case '\r': output << "\\r"; break;
+            case '\t': output << "\\t"; break;
+            default:
+                if (character < 0x20) {
+                    const char hex[] = "0123456789abcdef";
+                    output << "\\u00" << hex[character >> 4] << hex[character & 0xf];
+                } else {
+                    output << character;
+                }
+        }
+    }
+    return output.str();
+}
+
 VOID WINAPI OnEvent(PEVENT_RECORD event) {
     if (!IsEqualGUID(event->EventHeader.ProviderId, kKernelProcessProvider)) {
         return;
@@ -64,8 +172,13 @@ VOID WINAPI OnEvent(PEVENT_RECORD event) {
         return;
     }
     const ULONG pid = EventProcessId(event);
+    const ULONG parent_pid = id == 1 ? EventUlong(event, L"ParentProcessID") : 0;
+    const std::string image = id == 1 ? EventText(event, L"ImageName") : std::string{};
+    const std::string command_line = id == 1 ? EventText(event, L"CommandLine") : std::string{};
     std::cout << "{\"type\":\"" << (id == 1 ? "start" : "stop")
-              << "\",\"pid\":" << pid << ",\"event_id\":" << id << "}" << std::endl;
+              << "\",\"pid\":" << pid << ",\"parent_pid\":" << parent_pid
+              << ",\"image\":\"" << JsonEscape(image) << "\",\"command_line\":\""
+              << JsonEscape(command_line) << "\",\"event_id\":" << id << "}" << std::endl;
 }
 
 void StopTraceSession() {

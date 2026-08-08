@@ -1,17 +1,18 @@
 #![forbid(unsafe_code)]
 
 use openguard_domain::{
-    AllowedHashRecord, ExclusionRecord, QuarantineRecord, ScanFinding, SecurityEvent, Severity,
+    AllowedHashRecord, ExclusionRecord, PersistenceItem, QuarantineRecord, ScanFinding,
+    SecurityEvent, Severity, TimelineEvent, TimelinePage,
 };
-use rusqlite::{Connection, OpenFlags, Row, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     time::Duration,
 };
 use thiserror::Error;
 
-pub const DATABASE_SCHEMA_VERSION: u32 = 4;
+pub const DATABASE_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -19,6 +20,8 @@ pub enum StorageError {
     Database(#[from] rusqlite::Error),
     #[error("filesystem error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("stored JSON error: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("database contains invalid severity '{0}'")]
     InvalidSeverity(String),
 }
@@ -42,6 +45,23 @@ pub struct SeenExecutable {
     pub signature: String,
     pub risk_score: u8,
     pub observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResponseRollback {
+    pub id: String,
+    pub action: String,
+    pub target: String,
+    pub payload: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    pub restored_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedResponseRollback {
+    pub owner_sid: String,
+    pub rollback: ResponseRollback,
 }
 
 impl Database {
@@ -176,9 +196,67 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_network_observed
                 ON network_observations(observed_at DESC, id DESC);
+            CREATE TABLE IF NOT EXISTS timeline_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_sid TEXT NOT NULL DEFAULT '',
+                category TEXT NOT NULL,
+                action TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                title TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                process_id INTEGER,
+                path TEXT NOT NULL DEFAULT '',
+                remote_address TEXT NOT NULL DEFAULT '',
+                correlation_id TEXT NOT NULL DEFAULT '',
+                occurred_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_timeline_owner_cursor
+                ON timeline_events(owner_sid, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_timeline_process
+                ON timeline_events(process_id, id DESC);
+            CREATE TABLE IF NOT EXISTS persistence_items (
+                owner_sid TEXT NOT NULL,
+                id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                location TEXT NOT NULL,
+                state TEXT NOT NULL,
+                risk TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+                response_capability TEXT NOT NULL DEFAULT 'none',
+                PRIMARY KEY(owner_sid, id)
+            );
+            CREATE TABLE IF NOT EXISTS response_rollbacks (
+                id TEXT PRIMARY KEY,
+                owner_sid TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                restored_at TEXT
+            );
             ",
         )?;
         migrate_seen_executables(&transaction)?;
+        transaction.execute(
+            r"INSERT INTO timeline_events(
+                owner_sid, category, action, severity, title, detail, process_id,
+                path, remote_address, correlation_id, occurred_at
+            )
+            SELECT owner_sid, 'detection', event_type, severity, title, detail, process_id,
+                   path, '', 'security-event-' || id, created_at
+            FROM security_events
+            WHERE NOT EXISTS (
+                SELECT 1 FROM timeline_events
+                WHERE correlation_id = 'security-event-' || security_events.id
+            )",
+            [],
+        )?;
         transaction.execute(
             "INSERT INTO metadata(key, value) VALUES('schema_version', ?1) \
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -335,8 +413,9 @@ impl Database {
         owner_sid: &str,
         event: &SecurityEvent,
     ) -> Result<i64, StorageError> {
-        let connection = self.connect()?;
-        connection.execute(
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
             r"INSERT INTO security_events(
                 owner_sid, event_type, severity, title, detail, process_id,
                 path, created_at, resolved
@@ -353,7 +432,26 @@ impl Database {
                 event.resolved,
             ],
         )?;
-        Ok(connection.last_insert_rowid())
+        let id = transaction.last_insert_rowid();
+        insert_timeline(
+            &transaction,
+            owner_sid,
+            &TimelineEvent {
+                id: None,
+                category: "detection".into(),
+                action: event.event_type.clone(),
+                severity: event.severity,
+                title: event.title.clone(),
+                detail: event.detail.clone(),
+                process_id: event.process_id,
+                path: event.path.clone(),
+                remote_address: String::new(),
+                correlation_id: format!("security-event-{id}"),
+                occurred_at: event.created_at.clone(),
+            },
+        )?;
+        transaction.commit()?;
+        Ok(id)
     }
 
     /// Returns recent events visible to an authenticated owner, newest first.
@@ -403,6 +501,323 @@ impl Database {
         })?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StorageError::from)
+    }
+
+    /// Persists one normalized investigation timeline event.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the event cannot be committed.
+    pub fn record_timeline(
+        &self,
+        owner_sid: &str,
+        event: &TimelineEvent,
+    ) -> Result<i64, StorageError> {
+        let connection = self.connect()?;
+        insert_timeline(&connection, owner_sid, event)?;
+        Ok(connection.last_insert_rowid())
+    }
+
+    /// Returns one owner-scoped, filtered cursor page of historical evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error for query failures or invalid stored severity values.
+    pub fn timeline(
+        &self,
+        owner_sid: &str,
+        before_id: Option<i64>,
+        limit: u32,
+        category: Option<&str>,
+        process_id: Option<u32>,
+        search: Option<&str>,
+    ) -> Result<TimelinePage, StorageError> {
+        let safe_limit = limit.clamp(1, 500);
+        let fetch_limit = i64::from(safe_limit) + 1;
+        let search = search.map(str::trim).filter(|value| !value.is_empty());
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            r"SELECT id, category, action, severity, title, detail, process_id, path,
+                     remote_address, correlation_id, occurred_at
+              FROM timeline_events
+              WHERE (owner_sid=?1 OR owner_sid='')
+                AND (?2 IS NULL OR id < ?2)
+                AND (?3 IS NULL OR category=?3)
+                AND (?4 IS NULL OR process_id=?4)
+                AND (?5 IS NULL OR title LIKE '%' || ?5 || '%' OR detail LIKE '%' || ?5 || '%'
+                     OR path LIKE '%' || ?5 || '%' OR remote_address LIKE '%' || ?5 || '%')
+              ORDER BY id DESC LIMIT ?6",
+        )?;
+        let rows = statement.query_map(
+            params![
+                owner_sid,
+                before_id,
+                category,
+                process_id,
+                search,
+                fetch_limit
+            ],
+            timeline_from_row,
+        )?;
+        let mut events = rows.collect::<Result<Vec<_>, _>>()?;
+        let has_more = events.len() > safe_limit as usize;
+        if has_more {
+            events.truncate(safe_limit as usize);
+        }
+        let next_before_id = if has_more {
+            events.last().and_then(|event| event.id)
+        } else {
+            None
+        };
+        Ok(TimelinePage {
+            events,
+            next_before_id,
+        })
+    }
+
+    /// Replaces the active persistence baseline and records added, changed, and removed items.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the transaction cannot be committed.
+    pub fn sync_persistence_inventory(
+        &self,
+        owner_sid: &str,
+        items: &[PersistenceItem],
+        observed_at: &str,
+    ) -> Result<Vec<TimelineEvent>, StorageError> {
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let existing = {
+            let mut statement = transaction.prepare(
+                "SELECT id, command, state, active FROM persistence_items WHERE owner_sid=?1",
+            )?;
+            let rows = statement.query_map([owner_sid], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    (
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, bool>(3)?,
+                    ),
+                ))
+            })?;
+            rows.collect::<Result<HashMap<_, _>, _>>()?
+        };
+        let mut active = HashSet::new();
+        let mut changes = Vec::new();
+        for item in items {
+            active.insert(item.id.clone());
+            let change = match existing.get(&item.id) {
+                None => Some(("added", Severity::Info, "Persistence entry discovered")),
+                Some((command, state, was_active))
+                    if !was_active || command != &item.command || state != &item.state =>
+                {
+                    Some(("changed", Severity::Medium, "Persistence entry changed"))
+                }
+                _ => None,
+            };
+            let evidence_json = serde_json::to_string(&item.evidence)?;
+            transaction.execute(
+                r"INSERT INTO persistence_items(
+                    owner_sid, id, category, name, command, location, state, risk,
+                    evidence_json, first_seen, last_seen, active, response_capability
+                ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, 1, ?11)
+                ON CONFLICT(owner_sid, id) DO UPDATE SET
+                    category=excluded.category, name=excluded.name, command=excluded.command,
+                    location=excluded.location, state=excluded.state, risk=excluded.risk,
+                    evidence_json=excluded.evidence_json, last_seen=excluded.last_seen,
+                    active=1, response_capability=excluded.response_capability",
+                params![
+                    owner_sid,
+                    item.id,
+                    item.category,
+                    item.name,
+                    item.command,
+                    item.location,
+                    item.state,
+                    item.risk.to_string(),
+                    evidence_json,
+                    observed_at,
+                    item.response_capability,
+                ],
+            )?;
+            if let Some((action, severity, title)) = change {
+                changes.push(TimelineEvent {
+                    id: None,
+                    category: "persistence".into(),
+                    action: action.into(),
+                    severity,
+                    title: title.into(),
+                    detail: format!("{}: {} ({})", item.category, item.name, item.state),
+                    process_id: None,
+                    path: item.command.clone(),
+                    remote_address: String::new(),
+                    correlation_id: format!("persistence:{}:{observed_at}", item.id),
+                    occurred_at: observed_at.into(),
+                });
+            }
+        }
+        for (id, (_, _, was_active)) in &existing {
+            if *was_active && !active.contains(id) {
+                transaction.execute(
+                    "UPDATE persistence_items SET active=0, last_seen=?3 WHERE owner_sid=?1 AND id=?2",
+                    params![owner_sid, id, observed_at],
+                )?;
+                changes.push(TimelineEvent {
+                    id: None,
+                    category: "persistence".into(),
+                    action: "removed".into(),
+                    severity: Severity::Info,
+                    title: "Persistence entry removed".into(),
+                    detail: id.clone(),
+                    process_id: None,
+                    path: String::new(),
+                    remote_address: String::new(),
+                    correlation_id: format!("persistence:{id}:{observed_at}"),
+                    occurred_at: observed_at.into(),
+                });
+            }
+        }
+        for event in &changes {
+            insert_timeline(&transaction, owner_sid, event)?;
+        }
+        transaction.commit()?;
+        Ok(changes)
+    }
+
+    /// Returns an active persistence item by its stable identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error for query or decode failures.
+    pub fn persistence_item(
+        &self,
+        owner_sid: &str,
+        id: &str,
+    ) -> Result<Option<PersistenceItem>, StorageError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            r"SELECT id, category, name, command, location, state, risk, evidence_json,
+                     last_seen, response_capability
+              FROM persistence_items WHERE owner_sid=?1 AND id=?2 AND active=1",
+        )?;
+        statement
+            .query_row(params![owner_sid, id], persistence_from_row)
+            .optional()
+            .map_err(StorageError::from)
+    }
+
+    /// Stores rollback material for a reversible response operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the record cannot be committed.
+    pub fn record_response_rollback(
+        &self,
+        owner_sid: &str,
+        rollback: &ResponseRollback,
+    ) -> Result<(), StorageError> {
+        let connection = self.connect()?;
+        connection.execute(
+            r"INSERT INTO response_rollbacks(
+                id, owner_sid, action, target, payload, created_at, expires_at, restored_at
+            ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                rollback.id,
+                owner_sid,
+                rollback.action,
+                rollback.target,
+                rollback.payload,
+                rollback.created_at,
+                rollback.expires_at,
+                rollback.restored_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Loads an unrestored rollback record owned by the authenticated user.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error for query failures.
+    pub fn response_rollback(
+        &self,
+        owner_sid: &str,
+        id: &str,
+    ) -> Result<Option<ResponseRollback>, StorageError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            r"SELECT id, action, target, payload, created_at, expires_at, restored_at
+              FROM response_rollbacks WHERE owner_sid=?1 AND id=?2 AND restored_at IS NULL",
+        )?;
+        statement
+            .query_row(params![owner_sid, id], |row| {
+                Ok(ResponseRollback {
+                    id: row.get(0)?,
+                    action: row.get(1)?,
+                    target: row.get(2)?,
+                    payload: row.get(3)?,
+                    created_at: row.get(4)?,
+                    expires_at: row.get(5)?,
+                    restored_at: row.get(6)?,
+                })
+            })
+            .optional()
+            .map_err(StorageError::from)
+    }
+
+    /// Loads unrestored rollback records for one response action so the service
+    /// can recover time-bound cleanup after a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error for query failures.
+    pub fn active_response_rollbacks(
+        &self,
+        action: &str,
+    ) -> Result<Vec<OwnedResponseRollback>, StorageError> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            r"SELECT owner_sid, id, action, target, payload, created_at, expires_at, restored_at
+              FROM response_rollbacks WHERE action=?1 AND restored_at IS NULL",
+        )?;
+        statement
+            .query_map(params![action], |row| {
+                Ok(OwnedResponseRollback {
+                    owner_sid: row.get(0)?,
+                    rollback: ResponseRollback {
+                        id: row.get(1)?,
+                        action: row.get(2)?,
+                        target: row.get(3)?,
+                        payload: row.get(4)?,
+                        created_at: row.get(5)?,
+                        expires_at: row.get(6)?,
+                        restored_at: row.get(7)?,
+                    },
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
+
+    /// Marks a rollback record restored exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the update cannot be committed.
+    pub fn mark_response_restored(
+        &self,
+        owner_sid: &str,
+        id: &str,
+        restored_at: &str,
+    ) -> Result<bool, StorageError> {
+        let connection = self.connect()?;
+        Ok(connection.execute(
+            "UPDATE response_rollbacks SET restored_at=?3 WHERE owner_sid=?1 AND id=?2 AND restored_at IS NULL",
+            params![owner_sid, id, restored_at],
+        )? == 1)
     }
 
     /// Persists one completed scanner finding for its authenticated owner.
@@ -736,6 +1151,87 @@ impl Database {
     }
 }
 
+fn insert_timeline(
+    connection: &Connection,
+    owner_sid: &str,
+    event: &TimelineEvent,
+) -> rusqlite::Result<usize> {
+    connection.execute(
+        r"INSERT INTO timeline_events(
+            owner_sid, category, action, severity, title, detail, process_id,
+            path, remote_address, correlation_id, occurred_at
+        ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            owner_sid,
+            event.category,
+            event.action,
+            event.severity.to_string(),
+            event.title,
+            event.detail,
+            event.process_id,
+            event.path,
+            event.remote_address,
+            event.correlation_id,
+            event.occurred_at,
+        ],
+    )
+}
+
+fn severity_from_row(row: &Row<'_>, index: usize) -> rusqlite::Result<Severity> {
+    let value: String = row.get(index)?;
+    Severity::parse(&value).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid severity {value}"),
+            )),
+        )
+    })
+}
+
+fn timeline_from_row(row: &Row<'_>) -> rusqlite::Result<TimelineEvent> {
+    Ok(TimelineEvent {
+        id: row.get(0)?,
+        category: row.get(1)?,
+        action: row.get(2)?,
+        severity: severity_from_row(row, 3)?,
+        title: row.get(4)?,
+        detail: row.get(5)?,
+        process_id: row
+            .get::<_, Option<i64>>(6)?
+            .and_then(|value| u32::try_from(value).ok()),
+        path: row.get(7)?,
+        remote_address: row.get(8)?,
+        correlation_id: row.get(9)?,
+        occurred_at: row.get(10)?,
+    })
+}
+
+fn persistence_from_row(row: &Row<'_>) -> rusqlite::Result<PersistenceItem> {
+    let evidence_json: String = row.get(7)?;
+    let evidence = serde_json::from_str(&evidence_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            evidence_json.len(),
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })?;
+    Ok(PersistenceItem {
+        id: row.get(0)?,
+        category: row.get(1)?,
+        name: row.get(2)?,
+        command: row.get(3)?,
+        location: row.get(4)?,
+        state: row.get(5)?,
+        risk: severity_from_row(row, 6)?,
+        evidence,
+        detected_at: row.get(8)?,
+        response_capability: row.get(9)?,
+    })
+}
+
 fn migrate_seen_executables(transaction: &rusqlite::Transaction<'_>) -> Result<(), StorageError> {
     let primary_key_columns = {
         let mut statement = transaction.prepare("PRAGMA table_info(seen_executables)")?;
@@ -819,7 +1315,7 @@ mod tests {
                 .get_metadata("schema_version")
                 .expect("metadata")
                 .as_deref(),
-            Some("4")
+            Some("5")
         );
         let id = database
             .record_event("S-1-5-21-test", &event())
@@ -982,6 +1478,163 @@ mod tests {
         assert!(
             database
                 .allowed_hash("owner-b", &allowed.sha256)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    fn timeline_event(title: &str, category: &str, process_id: Option<u32>) -> TimelineEvent {
+        TimelineEvent {
+            id: None,
+            category: category.into(),
+            action: "observed".into(),
+            severity: Severity::Info,
+            title: title.into(),
+            detail: format!("detail for {title}"),
+            process_id,
+            path: format!(r"C:\Evidence\{title}.txt"),
+            remote_address: String::new(),
+            correlation_id: title.into(),
+            occurred_at: "unix:10".into(),
+        }
+    }
+
+    #[test]
+    fn timeline_is_owner_scoped_filtered_and_cursor_paginated() {
+        let directory = TempDir::new().expect("temporary directory");
+        let database = Database::open(directory.path().join("timeline.db")).expect("database");
+        database
+            .record_timeline("owner-a", &timeline_event("first", "file", Some(42)))
+            .unwrap();
+        database
+            .record_timeline("owner-a", &timeline_event("second", "response", None))
+            .unwrap();
+        database
+            .record_timeline("owner-b", &timeline_event("private", "file", Some(42)))
+            .unwrap();
+
+        let first_page = database
+            .timeline("owner-a", None, 1, None, None, None)
+            .unwrap();
+        assert_eq!(first_page.events.len(), 1);
+        assert_eq!(first_page.events[0].title, "second");
+        let second_page = database
+            .timeline("owner-a", first_page.next_before_id, 1, None, None, None)
+            .unwrap();
+        assert_eq!(second_page.events[0].title, "first");
+        assert!(second_page.next_before_id.is_none());
+        assert_eq!(
+            database
+                .timeline("owner-a", None, 10, Some("file"), Some(42), Some("first"))
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn persistence_sync_reports_only_baseline_changes() {
+        let directory = TempDir::new().expect("temporary directory");
+        let database = Database::open(directory.path().join("persistence.db")).expect("database");
+        let mut item = PersistenceItem {
+            id: "service-example".into(),
+            category: "service".into(),
+            name: "Example".into(),
+            command: r"C:\Example\service.exe".into(),
+            location: r"HKLM\Services\Example".into(),
+            state: "automatic".into(),
+            risk: Severity::Info,
+            evidence: vec!["test".into()],
+            detected_at: "unix:1".into(),
+            response_capability: "disable_restore".into(),
+        };
+        assert_eq!(
+            database
+                .sync_persistence_inventory("owner", &[item.clone()], "unix:1")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            database
+                .sync_persistence_inventory("owner", &[item.clone()], "unix:2")
+                .unwrap()
+                .is_empty()
+        );
+        item.command.push_str(" --changed");
+        assert_eq!(
+            database
+                .sync_persistence_inventory("owner", &[item], "unix:3")
+                .unwrap()[0]
+                .action,
+            "changed"
+        );
+        assert_eq!(
+            database
+                .sync_persistence_inventory("owner", &[], "unix:4")
+                .unwrap()[0]
+                .action,
+            "removed"
+        );
+        assert!(
+            database
+                .persistence_item("owner", "service-example")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn response_rollbacks_are_owner_scoped_and_single_use() {
+        let directory = TempDir::new().expect("temporary directory");
+        let database = Database::open(directory.path().join("response.db")).expect("database");
+        let rollback = ResponseRollback {
+            id: "rollback-1".into(),
+            action: "block_remote_address".into(),
+            target: "203.0.113.5".into(),
+            payload: "OpenGuard Temporary Block rollback-1".into(),
+            created_at: "unix:1".into(),
+            expires_at: Some("unix:60".into()),
+            restored_at: None,
+        };
+        database
+            .record_response_rollback("owner-a", &rollback)
+            .unwrap();
+        database
+            .record_response_rollback(
+                "owner-b",
+                &ResponseRollback {
+                    id: "rollback-2".into(),
+                    ..rollback.clone()
+                },
+            )
+            .unwrap();
+        let active = database
+            .active_response_rollbacks("block_remote_address")
+            .unwrap();
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().any(|value| value.owner_sid == "owner-a"));
+        assert!(active.iter().any(|value| value.owner_sid == "owner-b"));
+        assert!(
+            database
+                .response_rollback("owner-b", "rollback-1")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            database
+                .mark_response_restored("owner-a", "rollback-1", "unix:2")
+                .unwrap()
+        );
+        assert!(
+            !database
+                .mark_response_restored("owner-a", "rollback-1", "unix:3")
+                .unwrap()
+        );
+        assert!(
+            database
+                .response_rollback("owner-a", "rollback-1")
                 .unwrap()
                 .is_none()
         );

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 — 2026-08-08
+
+- Added bounded real-time monitoring of Downloads, Desktop, Startup, and Temp through the Windows `ReadDirectoryChangesW` backend, NTFS USN journal identity/cursor checks, overflow reconciliation, and concurrency-limited scans of changed executable/script files.
+- Added an owner-scoped, filtered, cursor-paginated investigation timeline for detailed ETW process starts/stops and command lines, polling fallback events, file changes, DNS-enriched network flows, persistence changes, detections, and response audits.
+- Expanded persistence inventory to active services, drivers, scheduled tasks, permanent WMI command/script consumers, Run/RunOnce entries, and Chrome, Edge, and Firefox extensions with honest per-source coverage.
+- Added explicit confirmation flows for PID/path-revalidated terminate, suspend, and resume; detection-gated quarantine; temporary program-scoped outbound firewall blocks; and reversible disable/restore of review-worthy services and scheduled tasks.
+- Added schema v5 migrations, owner-scoped rollback records, bounded response fields/queues, safe limited-coverage states, and focused tests for monitoring, timeline pagination, persistence baselines, response authorization, and rollback isolation.
+
 ## 0.4.0 — 2026-08-08
 
 - Added an in-app process investigation view with SHA-256, signer and identity details, parent/child relationships, owned connections, persistence matches, and explainable evidence.

@@ -51,6 +51,7 @@ public sealed partial class MainPage : Page
         {
             "processes" => typeof(ProcessesPage),
             "network" => typeof(NetworkPage),
+            "investigation" => typeof(InvestigationPage),
             "scanner" => typeof(ScannerPage),
             "detections" => typeof(DetectionsPage),
             "quarantine" => typeof(QuarantinePage),

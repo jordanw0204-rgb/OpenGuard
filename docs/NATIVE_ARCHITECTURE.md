@@ -102,18 +102,29 @@ The service is the sole writer and normal reader of the security database. The U
 - Per-user UI preferences: `%LOCALAPPDATA%\OpenGuard`
 - Logs: Windows Event Log plus bounded local diagnostic logs with no file contents
 
-Native v0.3 starts a new machine database. The former prototype database is not imported automatically because its trust and ownership model differs from the service-owned schema.
+Native v0.3 starts a new machine database. Schema v5 adds the normalized timeline, persistence baseline, and owner-scoped response rollback records. The former prototype database is not imported automatically because its trust and ownership model differs from the service-owned schema.
 
 ## Telemetry pipeline
 
-1. A minimal native ETW helper subscribes to kernel process events and reports event counts and coverage state.
+1. A minimal native ETW helper subscribes to kernel process events and forwards bounded start/stop evidence, including parent, image, and command line fields when the provider exposes them.
 2. Tool Help and IP Helper snapshots reconcile current process and endpoint state on each bounded snapshot request.
 3. TCP EStats supplies connection byte counters where Windows exposes them; the client calculates rates from successive monotonic samples.
 4. A read-only WFP subscription reports availability and event counts without installing filters.
 5. The service enriches observations with executable identity, Authenticode, signed reputation, and per-user history.
 6. A correlation pass combines process ancestry, executable novelty/trust, and destination reputation into additive, explainable evidence; ordinary trusted network activity does not become an alert by itself.
-7. Storage uses short SQLite WAL transactions for durable scan, alert, policy, quarantine, update, and executable-baseline state.
-8. IPC returns bounded snapshots; DNS lookups run in a cached background resolver and never block a response.
+7. Per-user `ReadDirectoryChangesW` watchers cover Downloads, Desktop, Startup, and Temp; a bounded queue, NTFS USN journal identity/cursor checks, and metadata enumeration reconcile notification gaps without claiming kernel pre-execution blocking.
+8. On-demand persistence inventory covers service/driver registrations, scheduled tasks, permanent WMI consumers, Run/RunOnce values, and browser-extension registrations with per-source coverage notes.
+9. Storage uses short SQLite WAL transactions for durable scan, alert, policy, quarantine, update, executable-baseline, timeline, persistence-baseline, and response-rollback state.
+10. IPC returns bounded snapshots and cursor pages; DNS lookups run in a cached background resolver and never block a response.
+
+## User-confirmed response boundary
+
+- Every privileged response request is tied to the authenticated named-pipe client, requires an action-specific confirmation value, validates bounded fields, and writes a success or failure audit event.
+- Process terminate/suspend/resume re-resolves the PID image and refuses identity changes or protected targets.
+- Quarantine rescans the exact regular file and proceeds only for a current suspicious or malicious verdict; existing integrity-checked restore remains the rollback path.
+- Temporary destination blocking uses a program-scoped outbound Windows Firewall rule with an expiry timer and owner-scoped rollback record.
+- Automatic persistence response is limited to disabling/restoring review-worthy service and scheduled-task registrations. Drivers, WMI consumers, Run keys, and browser extensions remain report-only.
+- No response action runs automatically from a score, rule, file event, persistence finding, or network observation.
 
 All queues have capacity, cancellation, shutdown, health, dropped-event and latency metrics. Access denied is a first-class limited-coverage result, not an exception loop.
 

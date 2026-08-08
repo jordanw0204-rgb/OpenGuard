@@ -603,6 +603,7 @@ public sealed class NetworkRow : ObservableObject
     private string protocol = string.Empty;
     private string usageStatus = string.Empty;
     private string processPath = string.Empty;
+    private string remoteAddress = string.Empty;
     private double downloadBps;
     private double uploadBps;
 
@@ -647,11 +648,26 @@ public sealed class NetworkRow : ObservableObject
         }
     }
 
+    public string RemoteAddress
+    {
+        get => remoteAddress;
+        private set
+        {
+            if (SetProperty(ref remoteAddress, value))
+            {
+                OnPropertyChanged(nameof(CanBlockRemote));
+            }
+        }
+    }
+
     public double DownloadBps { get => downloadBps; private set => SetProperty(ref downloadBps, value); }
 
     public double UploadBps { get => uploadBps; private set => SetProperty(ref uploadBps, value); }
 
     public bool HasProcessPath => !string.IsNullOrWhiteSpace(ProcessPath);
+
+    public bool CanBlockRemote =>
+        !string.IsNullOrWhiteSpace(RemoteAddress) && RemoteAddress is not "0.0.0.0" and not "::";
 
     public string ConnectionSummary => $"{Application} · PID {ProcessId} · {Protocol} · {Destination} · ↓ {Download} · ↑ {Upload} · {Reputation}";
 
@@ -683,6 +699,7 @@ public sealed class NetworkRow : ObservableObject
         Protocol = endpoint.Protocol;
         UsageStatus = endpoint.UsageStatus.Replace('_', ' ');
         ProcessPath = endpoint.ProcessPath;
+        RemoteAddress = endpoint.RemoteAddress;
         DownloadBps = endpoint.ReceiveRateBps ?? 0;
         UploadBps = endpoint.SendRateBps ?? 0;
         OnPropertyChanged(nameof(ConnectionSummary));

@@ -9,9 +9,13 @@ repository.workspace = true
 [dependencies]
 openguard-detection.workspace = true
 openguard-domain.workspace = true
+hex.workspace = true
+notify.workspace = true
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+winreg.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
@@ -20,13 +24,18 @@ windows = { workspace = true, features = [
     "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_Security_WinTrust",
+    "Win32_Storage_FileSystem",
     "Win32_System_Antimalware",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_ProcessStatus",
     "Win32_System_Rpc",
+    "Win32_System_IO",
     "Win32_System_Threading",
 ] }
 
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[dev-dependencies]
+tempfile.workspace = true

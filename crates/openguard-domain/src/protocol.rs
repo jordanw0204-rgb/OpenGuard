@@ -1,6 +1,7 @@
 use crate::{
-    AllowedHashRecord, ContentStatus, ExclusionRecord, QuarantineRecord, ScanFinding,
-    ScanJobStatus, ScanProfile, SecurityEvent, ServiceHealth, SystemSnapshot,
+    AllowedHashRecord, ContentStatus, ExclusionRecord, PersistenceInventory, QuarantineRecord,
+    ResponseActionRequest, ResponseActionResult, ScanFinding, ScanJobStatus, ScanProfile,
+    SecurityEvent, ServiceHealth, SystemSnapshot, TimelinePage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,19 @@ pub enum Request {
     GetSnapshot,
     RecentEvents {
         limit: u32,
+    },
+    GetTimeline {
+        before_id: Option<i64>,
+        limit: u32,
+        category: Option<String>,
+        process_id: Option<u32>,
+        search: Option<String>,
+    },
+    GetPersistence {
+        refresh: bool,
+    },
+    ExecuteResponse {
+        request: ResponseActionRequest,
     },
     StartScan {
         target: String,
@@ -120,6 +134,9 @@ pub enum ResponseData {
     Health(ServiceHealth),
     Snapshot(SystemSnapshot),
     Events(Vec<SecurityEvent>),
+    Timeline(TimelinePage),
+    Persistence(PersistenceInventory),
+    ResponseAction(ResponseActionResult),
     ScanStarted { scan_id: String },
     ScanCancelled { scan_id: String },
     ScanStatus(ScanJobStatus),

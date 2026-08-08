@@ -84,6 +84,8 @@
                                         <MenuFlyoutItem Text="Open process file location" Tag="{x:Bind ProcessPath, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnOpenFileLocation" />
                                         <MenuFlyoutItem Text="Scan process with OpenGuard" Tag="{x:Bind ProcessPath, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnScanFromMenu" />
                                         <MenuFlyoutSeparator />
+                                        <MenuFlyoutItem Text="Block destination for 15 minutes…" Tag="{x:Bind}" IsEnabled="{x:Bind CanBlockRemote, Mode=OneWay}" Click="OnBlockDestination" />
+                                        <MenuFlyoutSeparator />
                                         <MenuFlyoutItem Text="Search process on web" Tag="{x:Bind Application, Mode=OneWay}" Click="OnSearchWeb" />
                                         <MenuFlyoutItem Text="Copy executable path" Tag="{x:Bind ProcessPath, Mode=OneWay}" IsEnabled="{x:Bind HasProcessPath, Mode=OneWay}" Click="OnCopyText" />
                                         <MenuFlyoutItem Text="Copy destination" Tag="{x:Bind Destination, Mode=OneWay}" Click="OnCopyText" />

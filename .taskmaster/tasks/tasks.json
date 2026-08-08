@@ -525,13 +525,92 @@
           }
         ],
         "updatedAt": "2026-08-08T08:08:55.252Z"
+      },
+      {
+        "id": "25",
+        "title": "OpenGuard 0.5 real-time investigation and response",
+        "description": "Deliver roadmap items 3, 4, 5, and 6: real-time file monitoring, expanded persistence detection, a historical investigation timeline, and safe user-confirmed response actions.",
+        "details": "Use documented Windows user-mode APIs; bounded queues and explicit coverage; persist paginated evidence; audit all response actions; destructive actions require confirmation; temporary network controls must be scoped and reversible; build, test, package, and deploy.",
+        "testStrategy": "Rust unit/integration tests, IPC contract tests, WinUI build and UI smoke checks, file watcher overflow/reconciliation tests, remediation authorization/audit tests, performance soak, installer verification.",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Real-time file monitoring",
+            "description": "Add bounded ReadDirectoryChangesW watchers, USN journal checkpoints, overflow reconciliation, telemetry coverage, and tests.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 25,
+            "updatedAt": "2026-08-08T09:31:14.278Z",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Expanded persistence inventory",
+            "description": "Inventory services/drivers, scheduled tasks, WMI permanent consumers, and browser extensions with explicit coverage and findings.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 25,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T09:31:14.281Z"
+          },
+          {
+            "id": 3,
+            "title": "Historical investigation timeline",
+            "description": "Persist normalized timeline evidence and expose owner-scoped, filtered, cursor-paginated IPC/UI queries.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 25,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T09:31:14.284Z"
+          },
+          {
+            "id": 4,
+            "title": "Confirmed response actions",
+            "description": "Add authenticated user-confirmed terminate/quarantine/temporary network block and reversible persistence-disable actions with audit records.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 25,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T09:31:14.288Z"
+          },
+          {
+            "id": 5,
+            "title": "WinUI investigation surfaces",
+            "description": "Add timeline and persistence UI, response confirmation dialogs, progress/error states, and coverage messaging.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 25,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T09:31:14.290Z"
+          },
+          {
+            "id": 6,
+            "title": "Verification, packaging, and deployment",
+            "description": "Run focused/full tests, Clippy, WinUI release build, performance smoke, package verification, install, and live smoke.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 25,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T09:31:14.293Z"
+          }
+        ],
+        "updatedAt": "2026-08-08T09:31:14.293Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-08-08T08:08:55.253Z",
-      "taskCount": 24,
-      "completedCount": 22,
+      "lastModified": "2026-08-08T09:31:14.293Z",
+      "taskCount": 25,
+      "completedCount": 23,
       "tags": [
         "master"
       ]
