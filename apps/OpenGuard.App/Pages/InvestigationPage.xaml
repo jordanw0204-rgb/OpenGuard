@@ -8,7 +8,7 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
         <StackPanel Spacing="5">
             <TextBlock Text="Investigation" Style="{StaticResource PageTitleStyle}" />
-            <TextBlock Text="Correlate process, file, network, persistence, detection, and response evidence over time." Style="{StaticResource MutedTextStyle}" />
+            <TextBlock Text="Correlate process, file, network, persistence, Sysmon, Windows audit, detection, and response evidence over time." Style="{StaticResource MutedTextStyle}" />
         </StackPanel>
         <Grid Grid.Row="1" ColumnSpacing="10">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="180" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -21,6 +21,8 @@
                 <ComboBoxItem Content="Persistence" Tag="persistence" />
                 <ComboBoxItem Content="Detections" Tag="detection" />
                 <ComboBoxItem Content="Responses" Tag="response" />
+                <ComboBoxItem Content="Sysmon" Tag="sysmon" />
+                <ComboBoxItem Content="Windows events" Tag="windows_event" />
                 <ComboBoxItem Content="System" Tag="system" />
             </ComboBox>
             <Button Grid.Column="2" Content="Refresh" Click="OnRefreshTimeline" />

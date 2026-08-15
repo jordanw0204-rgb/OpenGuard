@@ -1,10 +1,11 @@
 use crate::{WindowsError, process_image_path};
-use std::{net::IpAddr, path::Path, process::Command};
+use std::{collections::HashSet, net::IpAddr, path::Path, process::Command};
 use windows::Win32::{
     Foundation::CloseHandle,
     System::{
         Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+            TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
         },
         Threading::{
             OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
@@ -15,6 +16,7 @@ use windows::Win32::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessControlResult {
+    pub affected_processes: Vec<u32>,
     pub affected_threads: Vec<u32>,
     pub detail: String,
 }
@@ -66,6 +68,7 @@ fn terminate(pid: u32) -> Result<ProcessControlResult, WindowsError> {
     let _ = unsafe { CloseHandle(handle) };
     result?;
     Ok(ProcessControlResult {
+        affected_processes: vec![pid],
         affected_threads: Vec::new(),
         detail: format!("Terminated PID {pid}"),
     })
@@ -104,6 +107,7 @@ fn control_threads(pid: u32, suspend: bool) -> Result<ProcessControlResult, Wind
         )));
     }
     Ok(ProcessControlResult {
+        affected_processes: Vec::new(),
         detail: format!(
             "{} {} threads in PID {pid}",
             if suspend { "Suspended" } else { "Resumed" },
@@ -113,22 +117,97 @@ fn control_threads(pid: u32, suspend: bool) -> Result<ProcessControlResult, Wind
     })
 }
 
-/// Adds a narrowly scoped outbound Windows Firewall rule through the trusted system netsh.
+/// Terminates a revalidated root and its snapshot descendants, children first.
+/// Every accessible child path is captured and revalidated again immediately
+/// before termination to fail closed on PID reuse.
 ///
 /// # Errors
 ///
-/// Returns an error for invalid addresses/paths or a rejected firewall operation.
+/// Returns an error if the root identity changes or cannot be terminated.
+pub fn terminate_process_tree(
+    pid: u32,
+    expected_path: &Path,
+) -> Result<ProcessControlResult, WindowsError> {
+    let actual = process_image_path(pid)?;
+    if !same_path(&actual, expected_path) {
+        return Err(WindowsError::Api("root process identity changed".into()));
+    }
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
+        .map_err(|error| WindowsError::Api(format!("enumerate process tree: {error}")))?;
+    let mut entry = PROCESSENTRY32W {
+        dwSize: u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap_or(u32::MAX),
+        ..Default::default()
+    };
+    let mut relationships = Vec::new();
+    let mut next = unsafe { Process32FirstW(snapshot, &raw mut entry) }.is_ok();
+    while next && relationships.len() < 65_536 {
+        relationships.push((entry.th32ProcessID, entry.th32ParentProcessID));
+        next = unsafe { Process32NextW(snapshot, &raw mut entry) }.is_ok();
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+
+    let mut descendants = Vec::new();
+    let mut frontier = vec![pid];
+    let mut visited = HashSet::from([pid]);
+    while let Some(parent) = frontier.pop() {
+        for (child, child_parent) in &relationships {
+            if *child_parent == parent && *child > 4 && visited.insert(*child) {
+                descendants.push(*child);
+                frontier.push(*child);
+                if descendants.len() >= 4_096 {
+                    break;
+                }
+            }
+        }
+        if descendants.len() >= 4_096 {
+            break;
+        }
+    }
+
+    let mut affected = Vec::new();
+    let mut skipped = 0_usize;
+    for child in descendants.into_iter().rev() {
+        let Ok(path) = process_image_path(child) else {
+            skipped += 1;
+            continue;
+        };
+        match control_process("terminate", child, &path) {
+            Ok(_) => affected.push(child),
+            Err(_) => skipped += 1,
+        }
+    }
+    control_process("terminate", pid, expected_path)?;
+    affected.push(pid);
+    Ok(ProcessControlResult {
+        affected_threads: Vec::new(),
+        detail: format!(
+            "Terminated {} revalidated process(es) in the tree; {skipped} inaccessible or changed descendants skipped",
+            affected.len()
+        ),
+        affected_processes: affected,
+    })
+}
+
+/// Adds a narrowly scoped application/destination block to the built-in Windows Firewall/WFP
+/// policy through the trusted system `netsh`. No custom callout or kernel driver is installed.
+///
+/// # Errors
+///
+/// Returns an error if the process identity changed, the scope is invalid, or Windows rejects the
+/// firewall operation.
 pub fn block_remote_address(
     rule_name: &str,
     address: &str,
-    program: Option<&Path>,
+    pid: u32,
+    expected_path: &Path,
 ) -> Result<(), WindowsError> {
-    let _: IpAddr = address
-        .split('%')
-        .next()
-        .unwrap_or(address)
-        .parse()
-        .map_err(|_| WindowsError::Api("remote address is not a valid IP address".into()))?;
+    validate_firewall_scope(address, expected_path)?;
+    let actual_path = process_image_path(pid)?;
+    if !same_path(&actual_path, expected_path) {
+        return Err(WindowsError::Api(
+            "process identity changed before applying the network block".into(),
+        ));
+    }
     validate_rule_name(rule_name)?;
     let mut command = Command::new(system_tool("netsh.exe"));
     command.args([
@@ -142,10 +221,9 @@ pub fn block_remote_address(
         &format!("remoteip={address}"),
         "enable=yes",
         "profile=any",
+        "interfacetype=any",
     ]);
-    if let Some(program) = program.filter(|path| path.is_absolute()) {
-        command.arg(format!("program={}", program.display()));
-    }
+    command.arg(format!("program={}", actual_path.display()));
     run_tool(command, "add temporary firewall rule")
 }
 
@@ -253,6 +331,26 @@ fn validate_rule_name(value: &str) -> Result<(), WindowsError> {
     }
 }
 
+fn validate_firewall_scope(address: &str, program: &Path) -> Result<(), WindowsError> {
+    let _: IpAddr = address
+        .split('%')
+        .next()
+        .unwrap_or(address)
+        .parse()
+        .map_err(|_| WindowsError::Api("remote address is not a valid IP address".into()))?;
+    let display = program.as_os_str().to_string_lossy();
+    if !program.is_absolute()
+        || display.is_empty()
+        || display.len() > 32_767
+        || display.contains(['\0', '\r', '\n'])
+    {
+        return Err(WindowsError::Api(
+            "an absolute executable path is required for an application-scoped block".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn run_tool(mut command: Command, action: &str) -> Result<(), WindowsError> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     use std::os::windows::process::CommandExt;
@@ -293,4 +391,23 @@ fn same_path(left: &Path, right: &Path) -> bool {
             .to_ascii_lowercase()
     };
     normalize(left) == normalize(right)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn firewall_scope_requires_ip_and_absolute_application_path() {
+        assert!(validate_firewall_scope("8.8.8.8", Path::new(r"C:\Tools\agent.exe")).is_ok());
+        assert!(validate_firewall_scope("not-an-ip", Path::new(r"C:\Tools\agent.exe")).is_err());
+        assert!(validate_firewall_scope("8.8.8.8", Path::new("agent.exe")).is_err());
+    }
+
+    #[test]
+    fn firewall_rule_names_are_owned_and_bounded() {
+        assert!(validate_rule_name("OpenGuard Temporary Block abc123").is_ok());
+        assert!(validate_rule_name("Unrelated Rule").is_err());
+        assert!(validate_rule_name("OpenGuard Temporary Block bad/name").is_err());
+    }
 }

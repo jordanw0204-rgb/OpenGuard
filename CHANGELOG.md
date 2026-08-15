@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0 — 2026-08-08
+
+- Added an optional, non-invasive Sysmon Operational-channel subscriber with bounded XML parsing, queue/drop counters, explicit coverage, and no automatic installation or configuration changes.
+- Added native Windows Security process-audit and Microsoft Defender Operational event subscriptions, including locally persisted Defender detections and honest per-channel limited states.
+- Added conservative 10-minute behavior chains for LSASS access plus outbound activity, injection/tampering plus outbound activity, and executable drop plus persistence plus outbound activity, with MITRE evidence and one-hour deduplication.
+- Bounded the chain engine, event queues, XML/field sizes, and SQLite history (10,000 detections and 100,000 timeline observations) to keep always-on collection lightweight.
+- Tightened temporary network isolation to require a live PID/path identity match and create only application-plus-destination Windows Firewall/WFP rules with expiry and audited rollback.
+- Added Overview coverage for native event channels, optional Sysmon, behavior chains, and driverless isolation; added Sysmon/Windows-event Investigation filters.
+- Kept the custom minifilter and WFP callout disabled and outside release packages pending sponsorship, assigned altitude/signing, independent review, Verifier/HLK validation, and a demonstrated user-mode coverage gap.
+
+## 0.6.0 — 2026-08-08
+
+- Added an independent three-second service protection loop with cached snapshots, bounded new-executable analysis, signed-content hot reload, and no dependency on the UI being open.
+- Added low-noise PE/script capability analysis for browser credential access, keylogging, process injection, screen capture, remote-control stacks, and LSASS dumping, with MITRE-mapped evidence and negative-corpus tests.
+- Added metadata-only bounded process-memory layout inspection and repeated external-flow beacon correlation for already suspicious executable identities.
+- Added schema v6 capability persistence, version-bound service/helper self-integrity checks, and global detection visibility through owner-scoped IPC queries.
+- Removed ETW/file draining and repeated whole-process baseline writes from process/network snapshot requests; baselines now use an in-memory cache with periodic persistence.
+- Added explicit, audited process-tree termination with descendant/root identity revalidation and safe skipping of raced or inaccessible PIDs.
+- Added a build-tested optional AMSI provider with strict trusted-signature registration and a fail-closed minifilter altitude/review/signing gate. Unsigned privileged components remain excluded from packages.
+
 ## 0.5.0 — 2026-08-08
 
 - Added bounded real-time monitoring of Downloads, Desktop, Startup, and Temp through the Windows `ReadDirectoryChangesW` backend, NTFS USN journal identity/cursor checks, overflow reconciliation, and concurrency-limited scans of changed executable/script files.

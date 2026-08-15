@@ -488,7 +488,14 @@ internal sealed record NativeScanFinding(
     string AmsiResult,
     string YaraStatus,
     IReadOnlyList<string> YaraMatches,
+    IReadOnlyList<NativeThreatCapability> Capabilities,
     string ScannedAt);
+
+internal sealed record NativeThreatCapability(
+    string Category,
+    string MitreTechnique,
+    byte Confidence,
+    IReadOnlyList<string> Evidence);
 
 internal sealed record NativeQuarantineRecord(
     string Id,

@@ -11,6 +11,7 @@ openguard-detection.workspace = true
 openguard-domain.workspace = true
 hex.workspace = true
 notify.workspace = true
+quick-xml.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -27,9 +28,11 @@ windows = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Antimalware",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_EventLog",
     "Win32_System_ProcessStatus",
     "Win32_System_Rpc",
     "Win32_System_IO",
+    "Win32_System_Memory",
     "Win32_System_Threading",
 ] }
 

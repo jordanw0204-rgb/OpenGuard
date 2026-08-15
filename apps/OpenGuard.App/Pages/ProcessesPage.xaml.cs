@@ -157,6 +157,10 @@ public sealed partial class ProcessesPage : Page
         await RunProcessResponseAsync(sender, "terminate_process", "Terminate this process?",
             "The process will be ended immediately after OpenGuard revalidates its PID and executable path. Unsaved application data may be lost.", "Terminate");
 
+    private async void OnTerminateProcessTree(object sender, RoutedEventArgs e) =>
+        await RunProcessResponseAsync(sender, "terminate_process_tree", "Terminate this process tree?",
+            "OpenGuard will snapshot descendants, revalidate each accessible executable identity, terminate children first, and terminate the selected root last. Inaccessible or changed descendants are skipped.", "Terminate tree");
+
     private async void OnQuarantineExecutable(object sender, RoutedEventArgs e) =>
         await RunProcessResponseAsync(sender, "quarantine_file", "Scan and quarantine this executable?",
             "OpenGuard will rescan the exact file and only isolate it if the current result is suspicious or malicious.", "Scan and quarantine");

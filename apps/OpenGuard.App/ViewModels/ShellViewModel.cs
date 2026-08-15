@@ -111,6 +111,18 @@ public partial class ShellViewModel : ObservableObject
     [ObservableProperty]
     public partial string ContentCoverageText { get; set; } = "LIMITED";
 
+    [ObservableProperty]
+    public partial string EventLogCoverageText { get; set; } = "PENDING";
+
+    [ObservableProperty]
+    public partial string SysmonCoverageText { get; set; } = "OPTIONAL";
+
+    [ObservableProperty]
+    public partial string BehaviorCoverageText { get; set; } = "PENDING";
+
+    [ObservableProperty]
+    public partial string EnforcementCoverageText { get; set; } = "PENDING";
+
     public async Task RefreshServiceStatusAsync() =>
         await RefreshSnapshotAsync(CancellationToken.None);
 
@@ -148,6 +160,10 @@ public partial class ShellViewModel : ObservableObject
             ProcessCoverageText = CoverageLabel(snapshot.Coverage, "process_snapshot");
             NetworkCoverageText = CoverageLabel(snapshot.Coverage, "network_snapshot");
             ContentCoverageText = CoverageLabel(snapshot.Coverage, "content_engine");
+            EventLogCoverageText = CoverageLabel(snapshot.Coverage, "windows_event_log");
+            SysmonCoverageText = CoverageLabel(snapshot.Coverage, "sysmon_events");
+            BehaviorCoverageText = CoverageLabel(snapshot.Coverage, "behavior_chain");
+            EnforcementCoverageText = CoverageLabel(snapshot.Coverage, "driverless_enforcement");
             ServiceHeadline = "Native engine online";
             ServiceBadgeText = snapshot.Elevated ? "FULL SERVICE" : "LIMITED MODE";
             ServiceStatus = snapshot.Elevated
@@ -459,6 +475,10 @@ public partial class ShellViewModel : ObservableObject
         ServiceBadgeText = "SERVICE OFFLINE";
         ProcessCoverageText = "OFFLINE";
         NetworkCoverageText = "OFFLINE";
+        EventLogCoverageText = "OFFLINE";
+        SysmonCoverageText = "OFFLINE";
+        BehaviorCoverageText = "OFFLINE";
+        EnforcementCoverageText = "OFFLINE";
     }
 
     private static string CoverageLabel(IReadOnlyList<NativeCoverage> coverage, string source)
@@ -644,6 +664,7 @@ public sealed class NetworkRow : ObservableObject
             if (SetProperty(ref processPath, value))
             {
                 OnPropertyChanged(nameof(HasProcessPath));
+                OnPropertyChanged(nameof(CanBlockRemote));
             }
         }
     }
@@ -667,7 +688,10 @@ public sealed class NetworkRow : ObservableObject
     public bool HasProcessPath => !string.IsNullOrWhiteSpace(ProcessPath);
 
     public bool CanBlockRemote =>
-        !string.IsNullOrWhiteSpace(RemoteAddress) && RemoteAddress is not "0.0.0.0" and not "::";
+        ProcessId > 4 &&
+        HasProcessPath &&
+        !string.IsNullOrWhiteSpace(RemoteAddress) &&
+        RemoteAddress is not "0.0.0.0" and not "::";
 
     public string ConnectionSummary => $"{Application} · PID {ProcessId} · {Protocol} · {Destination} · ↓ {Download} · ↑ {Upload} · {Reputation}";
 

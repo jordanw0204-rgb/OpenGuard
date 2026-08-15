@@ -12,7 +12,7 @@ use std::{
 };
 use thiserror::Error;
 
-pub const DATABASE_SCHEMA_VERSION: u32 = 5;
+pub const DATABASE_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -152,6 +152,7 @@ impl Database {
                 amsi_result TEXT NOT NULL,
                 yara_status TEXT NOT NULL DEFAULT 'not_scanned',
                 yara_matches_json TEXT NOT NULL DEFAULT '[]',
+                capabilities_json TEXT NOT NULL DEFAULT '[]',
                 scanned_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_scans_time
@@ -243,6 +244,7 @@ impl Database {
             ",
         )?;
         migrate_seen_executables(&transaction)?;
+        migrate_scan_capabilities(&transaction)?;
         transaction.execute(
             r"INSERT INTO timeline_events(
                 owner_sid, category, action, severity, title, detail, process_id,
@@ -516,6 +518,33 @@ impl Database {
         let connection = self.connect()?;
         insert_timeline(&connection, owner_sid, event)?;
         Ok(connection.last_insert_rowid())
+    }
+
+    /// Retains only the newest bounded security and timeline history rows.
+    ///
+    /// This is intentionally count-based so a noisy optional telemetry source cannot grow the
+    /// service-owned database without bound. A minimum of one row is always retained.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the pruning transaction cannot be committed.
+    pub fn prune_event_history(
+        &self,
+        maximum_security_events: u32,
+        maximum_timeline_events: u32,
+    ) -> Result<(usize, usize), StorageError> {
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let security_deleted = transaction.execute(
+            "DELETE FROM security_events WHERE id IN (SELECT id FROM security_events ORDER BY id DESC LIMIT -1 OFFSET ?1)",
+            params![i64::from(maximum_security_events.max(1))],
+        )?;
+        let timeline_deleted = transaction.execute(
+            "DELETE FROM timeline_events WHERE id IN (SELECT id FROM timeline_events ORDER BY id DESC LIMIT -1 OFFSET ?1)",
+            params![i64::from(maximum_timeline_events.max(1))],
+        )?;
+        transaction.commit()?;
+        Ok((security_deleted, timeline_deleted))
     }
 
     /// Returns one owner-scoped, filtered cursor page of historical evidence.
@@ -833,6 +862,7 @@ impl Database {
         let yara_matches = serde_json::to_string(&finding.yara_matches).map_err(|error| {
             StorageError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
         })?;
+        let capabilities = serde_json::to_string(&finding.capabilities)?;
         let size_bytes = i64::try_from(finding.size_bytes).map_err(|error| {
             StorageError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
         })?;
@@ -841,8 +871,8 @@ impl Database {
             r"INSERT INTO scan_results(
                 owner_sid, path, verdict, score, reasons_json, sha256,
                 size_bytes, signature, amsi_result, yara_status,
-                yara_matches_json, scanned_at
-            ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                yara_matches_json, capabilities_json, scanned_at
+            ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 owner_sid,
                 finding.path,
@@ -855,6 +885,7 @@ impl Database {
                 finding.amsi_result,
                 finding.yara_status,
                 yara_matches,
+                capabilities,
                 finding.scanned_at,
             ],
         )?;
@@ -1272,6 +1303,22 @@ fn migrate_seen_executables(transaction: &rusqlite::Transaction<'_>) -> Result<(
     Ok(())
 }
 
+fn migrate_scan_capabilities(transaction: &rusqlite::Transaction<'_>) -> Result<(), StorageError> {
+    let has_column = {
+        let mut statement = transaction.prepare("PRAGMA table_info(scan_results)")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+        rows.filter_map(Result::ok)
+            .any(|name| name == "capabilities_json")
+    };
+    if !has_column {
+        transaction.execute(
+            "ALTER TABLE scan_results ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 fn quarantine_from_row(row: &Row<'_>) -> rusqlite::Result<StoredQuarantine> {
     Ok(StoredQuarantine {
         record: QuarantineRecord {
@@ -1315,7 +1362,7 @@ mod tests {
                 .get_metadata("schema_version")
                 .expect("metadata")
                 .as_deref(),
-            Some("5")
+            Some("6")
         );
         let id = database
             .record_event("S-1-5-21-test", &event())
@@ -1342,6 +1389,28 @@ mod tests {
     }
 
     #[test]
+    fn prunes_event_history_to_bounded_newest_rows() {
+        let directory = TempDir::new().expect("temporary directory");
+        let database = Database::open(directory.path().join("openguard.db")).expect("database");
+        for index in 0..5 {
+            let mut item = event();
+            item.title = format!("event-{index}");
+            database
+                .record_event("owner-a", &item)
+                .expect("record event");
+        }
+        let deleted = database.prune_event_history(2, 3).expect("prune history");
+        assert_eq!(deleted, (3, 2));
+        let events = database.recent_events("owner-a", 20).expect("events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].title, "event-4");
+        let timeline = database
+            .timeline("owner-a", None, 20, None, None, None)
+            .expect("timeline");
+        assert_eq!(timeline.events.len(), 3);
+    }
+
+    #[test]
     fn persists_native_scan_findings() {
         let directory = TempDir::new().expect("temporary directory");
         let database = Database::open(directory.path().join("openguard.db")).expect("database");
@@ -1356,6 +1425,7 @@ mod tests {
             amsi_result: "not_scanned".into(),
             yara_status: "active".into(),
             yara_matches: Vec::new(),
+            capabilities: Vec::new(),
             scanned_at: "unix:1".into(),
         };
         let id = database

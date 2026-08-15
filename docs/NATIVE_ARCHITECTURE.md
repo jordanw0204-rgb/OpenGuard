@@ -1,6 +1,6 @@
 # OpenGuard native architecture
 
-Status: Implemented through the native v0.4 release
+Status: Implemented through the native v0.7 release
 Decision date: 2026-08-07
 
 ## Decision
@@ -102,27 +102,29 @@ The service is the sole writer and normal reader of the security database. The U
 - Per-user UI preferences: `%LOCALAPPDATA%\OpenGuard`
 - Logs: Windows Event Log plus bounded local diagnostic logs with no file contents
 
-Native v0.3 starts a new machine database. Schema v5 adds the normalized timeline, persistence baseline, and owner-scoped response rollback records. The former prototype database is not imported automatically because its trust and ownership model differs from the service-owned schema.
+Native v0.3 starts a new machine database. Schema v6 adds normalized capability evidence to scan records on top of the v5 timeline, persistence baseline, and owner-scoped response rollback records. The former prototype database is not imported automatically because its trust and ownership model differs from the service-owned schema.
 
 ## Telemetry pipeline
 
 1. A minimal native ETW helper subscribes to kernel process events and forwards bounded start/stop evidence, including parent, image, and command line fields when the provider exposes them.
-2. Tool Help and IP Helper snapshots reconcile current process and endpoint state on each bounded snapshot request.
+2. A service-owned three-second loop uses Tool Help and IP Helper to reconcile process/endpoint state and atomically publish a cached snapshot; UI requests do not trigger collection.
 3. TCP EStats supplies connection byte counters where Windows exposes them; the client calculates rates from successive monotonic samples.
-4. A read-only WFP subscription reports availability and event counts without installing filters.
-5. The service enriches observations with executable identity, Authenticode, signed reputation, and per-user history.
-6. A correlation pass combines process ancestry, executable novelty/trust, and destination reputation into additive, explainable evidence; ordinary trusted network activity does not become an alert by itself.
-7. Per-user `ReadDirectoryChangesW` watchers cover Downloads, Desktop, Startup, and Temp; a bounded queue, NTFS USN journal identity/cursor checks, and metadata enumeration reconcile notification gaps without claiming kernel pre-execution blocking.
-8. On-demand persistence inventory covers service/driver registrations, scheduled tasks, permanent WMI consumers, Run/RunOnce values, and browser-extension registrations with per-source coverage notes.
-9. Storage uses short SQLite WAL transactions for durable scan, alert, policy, quarantine, update, executable-baseline, timeline, persistence-baseline, and response-rollback state.
-10. IPC returns bounded snapshots and cursor pages; DNS lookups run in a cached background resolver and never block a response.
+4. `EvtSubscribe` consumes future Security process-audit and Defender Operational events. A separate optional subscriber consumes an existing Sysmon Operational channel without installing or reconfiguring Sysmon.
+5. A read-only WFP subscription reports availability and event counts. Confirmed application/destination isolation uses Windows Firewall policy enforced by WFP without a custom callout.
+6. The service enriches observations with executable identity, Authenticode, signed reputation, and per-user history.
+7. A correlation pass combines process ancestry, executable novelty/trust, PE/script capabilities, bounded memory protections, destination reputation, and repeated-flow behavior into additive, explainable evidence; ordinary trusted network activity and single dual-use APIs do not become high-severity alerts by themselves.
+8. A second bounded chain engine requires multiple Sysmon signals within 10 minutes: LSASS memory access plus outbound activity, injection/tampering plus outbound activity, or executable drop plus persistence plus outbound activity. Chains, evidence, queues, and alert frequency are capped.
+9. Per-user `ReadDirectoryChangesW` watchers cover Downloads, Desktop, Startup, and Temp; a bounded queue, NTFS USN journal identity/cursor checks, and metadata enumeration reconcile notification gaps without claiming kernel pre-execution blocking.
+10. On-demand persistence inventory covers service/driver registrations, scheduled tasks, permanent WMI consumers, Run/RunOnce values, and browser-extension registrations with per-source coverage notes.
+11. Storage uses short SQLite WAL transactions for durable scan, alert, policy, quarantine, update, executable-baseline, timeline, persistence-baseline, and response-rollback state. Detection history is capped at 10,000 rows and the timeline at 100,000 rows.
+12. IPC returns bounded snapshots and cursor pages; DNS lookups run in a cached background resolver and never block a response.
 
 ## User-confirmed response boundary
 
 - Every privileged response request is tied to the authenticated named-pipe client, requires an action-specific confirmation value, validates bounded fields, and writes a success or failure audit event.
-- Process terminate/suspend/resume re-resolves the PID image and refuses identity changes or protected targets.
+- Process terminate/suspend/resume re-resolves the PID image and refuses identity changes or protected targets. Process-tree termination snapshots descendants, revalidates every accessible image immediately before action, and terminates the root last.
 - Quarantine rescans the exact regular file and proceeds only for a current suspicious or malicious verdict; existing integrity-checked restore remains the rollback path.
-- Temporary destination blocking uses a program-scoped outbound Windows Firewall rule with an expiry timer and owner-scoped rollback record.
+- Temporary destination blocking requires a live PID/path match immediately before it creates an application-plus-remote-IP outbound Windows Firewall/WFP rule with an expiry timer and owner-scoped rollback record.
 - Automatic persistence response is limited to disabling/restoring review-worthy service and scheduled-task registrations. Drivers, WMI consumers, Run keys, and browser extensions remain report-only.
 - No response action runs automatically from a score, rule, file event, persistence finding, or network observation.
 
@@ -132,14 +134,14 @@ All queues have capacity, cancellation, shutdown, health, dropped-event and late
 
 - Stream SHA-256 rather than loading whole files.
 - Use YARA-X 1.19 through its Rust API with includes disabled and explicit scan limits.
-- Parse only bounded PE regions needed by explainable heuristics.
+- Parse bounded PE headers/imports with Goblin and require correlated primitive groups for credential, keylogging, injection, capture, and remote-control capability evidence.
 - Invoke AMSI as an optional installed-provider second opinion.
 - Verify Authenticode with `WinVerifyTrust`; only exact success is trusted.
 - Preserve explicit verdicts: clean, low risk, suspicious, malicious, skipped, error and cancelled.
 - Run service-requested scans on a bounded background worker so IPC and WinUI remain responsive. `OpenGuardScanner.exe` exposes the same native engine for standalone diagnostics; restricted-token/job isolation remains a hardening milestone.
 - Re-open/verify file identity before quarantine, store content under a non-executable extension, and verify its hash again before restore.
 
-No model-generated or opaque score is allowed to cause an automatic destructive action. Every alert has evidence, confidence, observation time and coverage source.
+No model-generated or opaque score is allowed to cause an automatic destructive action. Every alert has evidence, confidence, observation time and coverage source. Static capability evidence is capped below a malicious verdict.
 
 ## Update security
 
@@ -184,12 +186,14 @@ Release builds enable Rust LTO, one codegen unit, panic abort, overflow checks, 
 
 ## Kernel roadmap and signing gate
 
-A strong native architecture does not justify prematurely shipping a driver. The first native release preserves and improves all current user-mode behavior. The next protected-mode milestone adds:
+A strong native architecture does not justify prematurely shipping a driver. OpenGuard 0.7 remains deliberately driverless. A protected-mode milestone will begin only if sustained project sponsorship funds signing/review and measured evidence shows that supported user-mode interfaces cannot meet a concrete protection requirement. Its possible scope remains:
 
 1. A minimal minifilter that reports file create/write/execute identity and can hold an execution decision within a strict timeout.
 2. A minimal WFP callout for flow metadata and explicitly authorized blocking, not TLS decryption.
 3. A versioned binary driver protocol with no user-provided pointers or variable recursion.
 4. Static analysis, Driver Verifier, fuzzing, HLK, independent review, crash-dump handling and Microsoft-compatible retail signing.
+
+Until those gates are funded and complete, the custom minifilter stays disabled, the build gate fails closed, and no `.sys` file is included in ordinary packages. The existing user-mode Windows Firewall/WFP response is not blocked on that roadmap.
 
 OpenGuard will never instruct users to disable Secure Boot or enable test signing for a public release.
 

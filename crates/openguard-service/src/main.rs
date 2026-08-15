@@ -1,25 +1,29 @@
+mod behavior_chain;
+
 use anyhow::{Context, Result, anyhow};
+use behavior_chain::BehaviorChainEngine;
 use clap::Parser;
 use openguard_detection::{BehaviorContext, FileScanner, ScanError, correlate_behavior};
 use openguard_domain::{
     AllowedHashRecord, ApiError, ContentStatus, CoverageNote, CoverageState, ErrorCode,
-    ExclusionRecord, NetworkEndpoint, PROTOCOL_VERSION, PersistenceInventory, QuarantineRecord,
-    Request, RequestEnvelope, ResponseActionKind, ResponseActionRequest, ResponseActionResult,
-    ResponseData, ResponseEnvelope, ScanFinding, ScanJobState, ScanJobStatus, ScanProfile,
-    ScanVerdict, SecurityEvent, ServiceHealth, Severity, SignatureStatus, SystemSnapshot,
-    TimelineEvent,
+    ExclusionRecord, NetworkEndpoint, PROTOCOL_VERSION, PersistenceInventory, ProcessRecord,
+    QuarantineRecord, Request, RequestEnvelope, ResponseActionKind, ResponseActionRequest,
+    ResponseActionResult, ResponseData, ResponseEnvelope, ScanFinding, ScanJobState, ScanJobStatus,
+    ScanProfile, ScanVerdict, SecurityEvent, ServiceHealth, Severity, SignatureStatus,
+    SystemSnapshot, TimelineEvent,
 };
 use openguard_ipc::{read_frame, validate_request, write_frame};
 use openguard_storage::{Database, ResponseRollback, SeenExecutable};
 use openguard_updates::{DEFAULT_MANIFEST_URL, SecurityContentUpdater};
 use openguard_windows::{
-    FileMonitor, PersistenceContext, ReputationFeed, WindowsCollector, apply_windows_scan_signals,
-    block_remote_address, collect_persistence, control_process, platform_health,
-    remove_firewall_rule, set_persistence_enabled,
+    FileMonitor, NativeEventLogMonitor, PersistenceContext, ReputationFeed, SysmonMonitor,
+    WindowsCollector, apply_windows_scan_signals, block_remote_address, collect_persistence,
+    control_process, inspect_process_memory, platform_health, remove_firewall_rule,
+    set_persistence_enabled, terminate_process_tree,
 };
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::File,
     io::{BufRead, BufReader, Read, Write},
     mem::size_of,
@@ -30,10 +34,10 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        mpsc::{Receiver, SyncSender, sync_channel},
+        mpsc::{Receiver, Sender, SyncSender, channel, sync_channel},
     },
     thread,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 use windows::{
@@ -79,6 +83,12 @@ const PIPE_BUFFER_BYTES: u32 = 4 * 1024 * 1024;
 const QUARANTINE_MAGIC: &[u8] = b"OPENGUARD-QUARANTINE-V1\0";
 const SERVICE_NAME: &str = "OpenGuardNative";
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
+const PROTECTION_INTERVAL: Duration = Duration::from_secs(3);
+const REALTIME_SCAN_MAXIMUM_BYTES: u64 = 256 * 1024 * 1024;
+const MAXIMUM_REALTIME_SCANS_PER_CYCLE: usize = 8;
+const MAXIMUM_SECURITY_EVENT_HISTORY: u32 = 10_000;
+const MAXIMUM_TIMELINE_HISTORY: u32 = 100_000;
+const HISTORY_PRUNE_INTERVAL: Duration = Duration::from_hours(1);
 
 define_windows_service!(service_entry, service_main);
 
@@ -121,6 +131,80 @@ struct ServiceState {
     active_processes: HashMap<u32, String>,
     active_network: HashMap<String, NetworkEndpoint>,
     snapshot_baselined: bool,
+    protection_monitor: Option<ProtectionMonitor>,
+    integrity_state: CoverageNote,
+    executable_baselines: HashMap<String, ExecutableBaseline>,
+}
+
+struct ExecutableBaseline {
+    identities: HashSet<String>,
+    last_persisted: Instant,
+}
+
+enum ProtectionCommand {
+    UpdateContent {
+        scanner: Arc<FileScanner>,
+        reputation: ReputationFeed,
+    },
+    Stop,
+}
+
+struct ProtectionMonitor {
+    snapshot: Arc<Mutex<Option<SystemSnapshot>>>,
+    commands: Sender<ProtectionCommand>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl ProtectionMonitor {
+    fn start(
+        database: Database,
+        scanner: Arc<FileScanner>,
+        reputation: ReputationFeed,
+    ) -> Result<Self> {
+        let snapshot = Arc::new(Mutex::new(None));
+        let thread_snapshot = Arc::clone(&snapshot);
+        let (commands, receiver) = channel();
+        let worker = thread::Builder::new()
+            .name("OpenGuardProtection".into())
+            .spawn(move || {
+                run_protection_loop(&database, scanner, reputation, &thread_snapshot, &receiver);
+            })
+            .context("start background protection monitor")?;
+        Ok(Self {
+            snapshot,
+            commands,
+            worker: Some(worker),
+        })
+    }
+
+    fn snapshot(&self) -> Option<SystemSnapshot> {
+        self.snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn update_content(&self, scanner: Arc<FileScanner>, reputation: ReputationFeed) {
+        if self
+            .commands
+            .send(ProtectionCommand::UpdateContent {
+                scanner,
+                reputation,
+            })
+            .is_err()
+        {
+            tracing::warn!("background protection monitor is unavailable");
+        }
+    }
+}
+
+impl Drop for ProtectionMonitor {
+    fn drop(&mut self) {
+        let _ = self.commands.send(ProtectionCommand::Stop);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 struct ScanJob {
@@ -432,9 +516,524 @@ fn run_windows_service() -> Result<()> {
     Ok(())
 }
 
+fn run_protection_loop(
+    database: &Database,
+    mut scanner: Arc<FileScanner>,
+    reputation: ReputationFeed,
+    shared_snapshot: &Arc<Mutex<Option<SystemSnapshot>>>,
+    commands: &Receiver<ProtectionCommand>,
+) {
+    let mut collector = WindowsCollector::new();
+    collector.set_reputation_feed(reputation);
+    let mut known_identities = HashSet::new();
+    let mut baselined = false;
+    let mut pending = VecDeque::<ProcessRecord>::new();
+    let mut suspicious_identities = HashSet::<String>::new();
+    let mut beacon_counts = HashMap::<String, u8>::new();
+    let mut reported_beacons = HashSet::<String>::new();
+    let sysmon = SysmonMonitor::start();
+    let windows_event_log = NativeEventLogMonitor::start();
+    let mut behavior_chains = BehaviorChainEngine::default();
+    if let Err(error) =
+        database.prune_event_history(MAXIMUM_SECURITY_EVENT_HISTORY, MAXIMUM_TIMELINE_HISTORY)
+    {
+        tracing::warn!(error = %error, "prune protection history at startup failed");
+    }
+    let mut last_history_prune = Instant::now();
+
+    loop {
+        prune_protection_history(database, &mut last_history_prune);
+        persist_windows_events(database, &windows_event_log);
+        persist_sysmon_events(database, &sysmon, &mut behavior_chains);
+        match collector.snapshot() {
+            Ok(mut snapshot) => {
+                for process in &mut snapshot.processes {
+                    if process.identity.is_empty() {
+                        continue;
+                    }
+                    let first_observation = known_identities.insert(process.identity.clone());
+                    process.is_new = baselined && first_observation;
+                }
+                baselined = true;
+                apply_behavior_correlations(&mut snapshot);
+                pending.extend(
+                    snapshot
+                        .processes
+                        .iter()
+                        .filter(|process| process.is_new)
+                        .cloned(),
+                );
+                while pending.len() > 256 {
+                    pending.pop_front();
+                }
+
+                for _ in 0..MAXIMUM_REALTIME_SCANS_PER_CYCLE {
+                    let Some(process) = pending.pop_front() else {
+                        break;
+                    };
+                    if analyze_new_process(database, &scanner, &snapshot, &process) {
+                        suspicious_identities.insert(process.identity);
+                    }
+                }
+                correlate_beacons(
+                    database,
+                    &snapshot,
+                    &suspicious_identities,
+                    &mut beacon_counts,
+                    &mut reported_beacons,
+                );
+                append_protection_coverage(
+                    &mut snapshot,
+                    &sysmon,
+                    &windows_event_log,
+                    known_identities.len(),
+                    pending.len(),
+                );
+                *shared_snapshot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(snapshot);
+            }
+            Err(error) => tracing::warn!(error = %error, "background protection snapshot failed"),
+        }
+
+        match commands.recv_timeout(PROTECTION_INTERVAL) {
+            Ok(ProtectionCommand::UpdateContent {
+                scanner: updated_scanner,
+                reputation,
+            }) => {
+                scanner = updated_scanner;
+                collector.set_reputation_feed(reputation);
+            }
+            Ok(ProtectionCommand::Stop) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
+fn prune_protection_history(database: &Database, last_pruned: &mut Instant) {
+    if last_pruned.elapsed() < HISTORY_PRUNE_INTERVAL {
+        return;
+    }
+    match database.prune_event_history(MAXIMUM_SECURITY_EVENT_HISTORY, MAXIMUM_TIMELINE_HISTORY) {
+        Ok((security_deleted, timeline_deleted)) => tracing::debug!(
+            security_deleted,
+            timeline_deleted,
+            "pruned bounded protection history"
+        ),
+        Err(error) => tracing::warn!(error = %error, "prune protection history failed"),
+    }
+    *last_pruned = Instant::now();
+}
+
+fn persist_windows_events(database: &Database, monitor: &NativeEventLogMonitor) {
+    for event in monitor.drain(512) {
+        if event.event_id == 1116 {
+            let security_event = SecurityEvent {
+                id: None,
+                event_type: "windows_defender_detection".into(),
+                severity: event.severity(),
+                title: event.title(),
+                detail: event.detail(),
+                process_id: event.process_id(),
+                path: event.path().into(),
+                created_at: event.occurred_at,
+                resolved: false,
+            };
+            if let Err(error) = database.record_event("", &security_event) {
+                tracing::warn!(error = %error, "persist Windows Defender detection failed");
+            }
+            continue;
+        }
+        let timeline = TimelineEvent {
+            id: None,
+            category: "windows_event".into(),
+            action: event.action().into(),
+            severity: event.severity(),
+            title: event.title(),
+            detail: event.detail(),
+            process_id: event.process_id(),
+            path: event.path().into(),
+            remote_address: String::new(),
+            correlation_id: event.correlation_id(),
+            occurred_at: event.occurred_at,
+        };
+        if let Err(error) = database.record_timeline("", &timeline) {
+            tracing::warn!(error = %error, "persist Windows Event Log timeline event failed");
+        }
+    }
+}
+
+fn persist_sysmon_events(
+    database: &Database,
+    monitor: &SysmonMonitor,
+    behavior_chains: &mut BehaviorChainEngine,
+) {
+    let events = monitor.drain(512);
+    for event in &events {
+        let timeline = TimelineEvent {
+            id: None,
+            category: "sysmon".into(),
+            action: event.action().into(),
+            severity: event.severity(),
+            title: event.title(),
+            detail: event.detail(),
+            process_id: event.process_id(),
+            path: event.image().into(),
+            remote_address: event.remote_address().into(),
+            correlation_id: event.correlation_id(),
+            occurred_at: event.occurred_at.clone(),
+        };
+        if let Err(error) = database.record_timeline("", &timeline) {
+            tracing::warn!(error = %error, "persist Sysmon timeline event failed");
+        }
+    }
+    for alert in behavior_chains.ingest(&events) {
+        let security_event = SecurityEvent {
+            id: None,
+            event_type: alert.event_type.into(),
+            severity: alert.severity,
+            title: alert.title.into(),
+            detail: format!(
+                "{}; correlation={}; remote={}",
+                alert.detail, alert.correlation_id, alert.remote_address
+            ),
+            process_id: alert.process_id,
+            path: alert.path,
+            created_at: unix_timestamp(),
+            resolved: false,
+        };
+        if let Err(error) = database.record_event("", &security_event) {
+            tracing::warn!(error = %error, "persist Sysmon behavior chain failed");
+        }
+    }
+}
+
+fn append_protection_coverage(
+    snapshot: &mut SystemSnapshot,
+    sysmon: &SysmonMonitor,
+    windows_event_log: &NativeEventLogMonitor,
+    known_identities: usize,
+    pending_analyses: usize,
+) {
+    snapshot.coverage.push(CoverageNote {
+        source: "background_protection".into(),
+        state: CoverageState::Active,
+        detail: format!(
+            "Independent 3-second protection loop active; {known_identities} executable identities baselined; {pending_analyses} analyses queued"
+        ),
+    });
+    let sysmon_coverage = sysmon.coverage();
+    snapshot.coverage.push(CoverageNote {
+        source: "behavior_chain".into(),
+        state: sysmon_coverage.state.clone(),
+        detail: if sysmon_coverage.state == CoverageState::Active {
+            "Bounded 10-minute Sysmon chains correlate credential access, injection, executable drops, persistence, DNS, and outbound connections; duplicate alerts are suppressed for one hour".into()
+        } else {
+            "Behavior-chain engine is ready but optional Sysmon telemetry is unavailable; snapshot and ETW correlations remain active".into()
+        },
+    });
+    snapshot.coverage.push(CoverageNote {
+        source: "driverless_enforcement".into(),
+        state: CoverageState::Active,
+        detail: "Confirmed response actions use Windows process controls and application-scoped Windows Firewall/WFP policy with identity revalidation and rollback; no custom kernel driver is loaded".into(),
+    });
+    snapshot.coverage.push(windows_event_log.coverage());
+    snapshot.coverage.push(sysmon_coverage);
+}
+
+#[allow(clippy::too_many_lines)]
+fn analyze_new_process(
+    database: &Database,
+    scanner: &FileScanner,
+    snapshot: &SystemSnapshot,
+    process: &ProcessRecord,
+) -> bool {
+    let mut score = u16::from(process.risk.score);
+    let mut evidence = process.risk.reasons.clone();
+    let path = Path::new(&process.path);
+    let mut capability_categories = HashSet::new();
+    let mut file_verdict = ScanVerdict::Clean;
+    let mut signature = process.signature;
+    let cancelled = AtomicBool::new(false);
+
+    if path.is_file()
+        && path
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() <= REALTIME_SCAN_MAXIMUM_BYTES)
+    {
+        match scanner.scan_file(path, &cancelled) {
+            Ok(mut finding) => {
+                apply_windows_scan_signals(&mut finding);
+                score = score.max(u16::from(finding.score));
+                file_verdict = finding.verdict;
+                signature = finding.signature;
+                evidence.extend(finding.reasons.iter().cloned());
+                for capability in finding.capabilities {
+                    capability_categories.insert(capability.category.clone());
+                    evidence.push(format!(
+                        "MITRE {}: {} (confidence {}%)",
+                        capability.mitre_technique, capability.category, capability.confidence
+                    ));
+                    evidence.extend(capability.evidence);
+                }
+            }
+            Err(error) => {
+                tracing::debug!(error = %error, path = %process.path, "real-time executable scan skipped");
+            }
+        }
+    } else if path.is_file() {
+        evidence
+            .push("Real-time content scan deferred because the executable exceeds 256 MiB".into());
+    }
+
+    let external_network = snapshot.endpoints.iter().any(|endpoint| {
+        endpoint.pid == process.pid && endpoint.remote_port != 0 && endpoint.reputation != "local"
+    });
+    let malicious_destination = snapshot
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint.pid == process.pid && endpoint.reputation == "malicious");
+    if malicious_destination {
+        score = score.saturating_add(40);
+        evidence.push("Runtime connection to a malicious reputation indicator".into());
+    }
+
+    let memory = (signature != SignatureStatus::Trusted
+        || capability_categories.contains("process_injection"))
+    .then(|| inspect_process_memory(process.pid).ok())
+    .flatten();
+    if let Some(memory) = &memory {
+        if memory.private_executable_regions > 0 {
+            evidence.push(format!(
+                "Memory metadata: {} committed private executable regions ({} writable+executable)",
+                memory.private_executable_regions, memory.writable_executable_regions
+            ));
+        }
+        if capability_categories.contains("process_injection")
+            && memory.writable_executable_regions > 0
+        {
+            score = score.saturating_add(25);
+            evidence.push(
+                "Correlated injection imports with writable+executable private memory".into(),
+            );
+        }
+    }
+
+    if signature != SignatureStatus::Trusted && external_network {
+        if capability_categories.contains("browser_credential_access") {
+            score = score.saturating_add(25);
+            evidence.push("Credential-access capability correlated with an external flow".into());
+        }
+        if capability_categories.contains("keyboard_input_capture") {
+            score = score.saturating_add(25);
+            evidence.push("Keyboard-capture capability correlated with an external flow".into());
+        }
+        if capability_categories.contains("remote_control_stack") {
+            score = score.saturating_add(20);
+            evidence
+                .push("Remote-control capability stack correlated with an external flow".into());
+        }
+    }
+
+    let final_score = u8::try_from(score.min(100)).unwrap_or(100);
+    evidence.sort();
+    evidence.dedup();
+    evidence.truncate(24);
+    let (event_type, title) = if file_verdict == ScanVerdict::Malicious {
+        (
+            "malware_detected",
+            format!("Malware detected: {}", process.name),
+        )
+    } else if capability_categories.contains("browser_credential_access") && external_network {
+        (
+            "credential_theft_behavior",
+            format!("Possible browser credential theft: {}", process.name),
+        )
+    } else if capability_categories.contains("process_injection") {
+        (
+            "process_injection_behavior",
+            format!("Possible process injection: {}", process.name),
+        )
+    } else if capability_categories.contains("keyboard_input_capture") && external_network {
+        (
+            "keylogging_behavior",
+            format!("Possible keylogging activity: {}", process.name),
+        )
+    } else if capability_categories.contains("remote_control_stack") && external_network {
+        (
+            "remote_access_behavior",
+            format!("Possible remote-control activity: {}", process.name),
+        )
+    } else {
+        (
+            "new_executable",
+            format!("New executable observed: {}", process.name),
+        )
+    };
+    let event = SecurityEvent {
+        id: None,
+        event_type: event_type.into(),
+        severity: Severity::from_score(final_score),
+        title,
+        detail: if evidence.is_empty() {
+            "Executable identity was not present in the service baseline".into()
+        } else {
+            evidence.join("; ")
+        },
+        process_id: Some(process.pid),
+        path: process.path.clone(),
+        created_at: unix_timestamp(),
+        resolved: false,
+    };
+    if let Err(error) = database.record_event("", &event) {
+        tracing::warn!(error = %error, pid = process.pid, "persist background protection event failed");
+    }
+    final_score >= 45 || !capability_categories.is_empty()
+}
+
+fn correlate_beacons(
+    database: &Database,
+    snapshot: &SystemSnapshot,
+    suspicious_identities: &HashSet<String>,
+    counts: &mut HashMap<String, u8>,
+    reported: &mut HashSet<String>,
+) {
+    let processes = snapshot
+        .processes
+        .iter()
+        .map(|process| (process.pid, process))
+        .collect::<HashMap<_, _>>();
+    let mut active = HashSet::new();
+    for endpoint in snapshot
+        .endpoints
+        .iter()
+        .filter(|endpoint| endpoint.remote_port != 0 && endpoint.reputation != "local")
+    {
+        let Some(process) = processes.get(&endpoint.pid) else {
+            continue;
+        };
+        if !suspicious_identities.contains(&process.identity) {
+            continue;
+        }
+        let key = format!(
+            "{}|{}|{}",
+            process.identity, endpoint.remote_address, endpoint.remote_port
+        );
+        active.insert(key.clone());
+        let count = counts.entry(key.clone()).or_default();
+        *count = count.saturating_add(1);
+        if *count < 8 || !reported.insert(key) {
+            continue;
+        }
+        let event = SecurityEvent {
+            id: None,
+            event_type: "command_and_control_beacon".into(),
+            severity: if endpoint.reputation == "malicious" {
+                Severity::Critical
+            } else {
+                Severity::High
+            },
+            title: format!("Repeated outbound activity: {}", process.name),
+            detail: format!(
+                "MITRE T1071: suspicious executable maintained an external flow to {}:{} across at least eight protection cycles; reputation={}",
+                endpoint.remote_address, endpoint.remote_port, endpoint.reputation
+            ),
+            process_id: Some(process.pid),
+            path: process.path.clone(),
+            created_at: unix_timestamp(),
+            resolved: false,
+        };
+        if let Err(error) = database.record_event("", &event) {
+            tracing::warn!(error = %error, "persist beacon correlation failed");
+        }
+    }
+    counts.retain(|key, _| active.contains(key));
+}
+
+fn verify_runtime_integrity(database: &Database) -> Result<CoverageNote> {
+    let service =
+        std::env::current_exe().context("resolve service executable for integrity check")?;
+    let mut targets = vec![service.clone()];
+    let helper = service.with_file_name("OpenGuardETW.exe");
+    if helper.is_file() {
+        targets.push(helper);
+    }
+    let mut verified = 0_usize;
+    let mut changed = Vec::new();
+    for target in targets {
+        let name = target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("binary");
+        let key = format!("integrity:{}:{name}", env!("CARGO_PKG_VERSION"));
+        let actual = sha256_path(&target)?;
+        match database.get_metadata(&key)? {
+            Some(expected) if expected != actual => changed.push(format!(
+                "{} expected SHA-256 {}, observed {}",
+                target.display(),
+                expected,
+                actual
+            )),
+            Some(_) => verified += 1,
+            None => {
+                database.set_metadata(&key, &actual)?;
+                verified += 1;
+            }
+        }
+    }
+    if changed.is_empty() {
+        return Ok(CoverageNote {
+            source: "self_integrity".into(),
+            state: CoverageState::Active,
+            detail: format!(
+                "Verified {verified} version-bound service/helper hashes against the service-owned baseline"
+            ),
+        });
+    }
+    let detail = changed.join("; ");
+    database.record_event(
+        "",
+        &SecurityEvent {
+            id: None,
+            event_type: "self_integrity_failure".into(),
+            severity: Severity::Critical,
+            title: "OpenGuard component integrity changed".into(),
+            detail: detail.clone(),
+            process_id: Some(std::process::id()),
+            path: service.display().to_string(),
+            created_at: unix_timestamp(),
+            resolved: false,
+        },
+    )?;
+    Ok(CoverageNote {
+        source: "self_integrity".into(),
+        state: CoverageState::Limited,
+        detail,
+    })
+}
+
+fn sha256_path(path: &Path) -> Result<String> {
+    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("read {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
 fn create_state(mode: &'static str, database_path: &Path) -> Result<ServiceState> {
     let database = Database::open(database_path)
         .with_context(|| format!("open native database at {}", database_path.display()))?;
+    let integrity_state = verify_runtime_integrity(&database)?;
     recover_temporary_firewall_rules(&database)?;
     let state_root = database_path.parent().unwrap_or_else(|| Path::new("."));
     let updater = SecurityContentUpdater::new(state_root.join("SecurityContent"))
@@ -462,6 +1061,12 @@ fn create_state(mode: &'static str, database_path: &Path) -> Result<ServiceState
             "bundled-2026.08.06.1".into(),
             "bundled".into(),
         ));
+    let scanner = Arc::new(scanner);
+    let protection_monitor = Some(ProtectionMonitor::start(
+        database.clone(),
+        Arc::clone(&scanner),
+        reputation.clone(),
+    )?);
     let mut collector = WindowsCollector::new();
     collector.set_reputation_feed(reputation);
     let helper = etw_helper_path();
@@ -482,7 +1087,7 @@ fn create_state(mode: &'static str, database_path: &Path) -> Result<ServiceState
         mode,
         database,
         collector,
-        scanner: Arc::new(scanner),
+        scanner,
         scan_jobs: HashMap::new(),
         quarantine_root: database_path
             .parent()
@@ -499,6 +1104,9 @@ fn create_state(mode: &'static str, database_path: &Path) -> Result<ServiceState
         active_processes: HashMap::new(),
         active_network: HashMap::new(),
         snapshot_baselined: false,
+        protection_monitor,
+        integrity_state,
+        executable_baselines: HashMap::new(),
     })
 }
 
@@ -590,17 +1198,13 @@ fn handle_request(
             service_version: env!("CARGO_PKG_VERSION").into(),
         }),
         Request::GetHealth => Ok(ResponseData::Health(state.health())),
-        Request::GetSnapshot => {
-            state.drain_etw_activity();
-            state.drain_file_activity(client);
-            state.collect_snapshot(&client.sid)
-        }
-        .map(ResponseData::Snapshot)
-        .map_err(|error| ApiError {
-            code: ErrorCode::LimitedCoverage,
-            message: error.to_string(),
-            retryable: true,
-        }),
+        Request::GetSnapshot => { state.collect_snapshot(&client.sid) }
+            .map(ResponseData::Snapshot)
+            .map_err(|error| ApiError {
+                code: ErrorCode::LimitedCoverage,
+                message: error.to_string(),
+                retryable: true,
+            }),
         Request::RecentEvents { limit } => state
             .database
             .recent_events(&client.sid, limit)
@@ -617,6 +1221,7 @@ fn handle_request(
             process_id,
             search,
         } => {
+            state.drain_etw_activity();
             state.drain_file_activity(client);
             state
                 .database
@@ -953,6 +1558,7 @@ impl ScanWorker<'_> {
                         amsi_result: "not_scanned".into(),
                         yara_status: "not_scanned".into(),
                         yara_matches: Vec::new(),
+                        capabilities: Vec::new(),
                         scanned_at: unix_timestamp(),
                     },
                     single_file,
@@ -1574,6 +2180,7 @@ impl ServiceState {
     ) -> Result<(String, String, Option<String>, Option<String>), ApiError> {
         match request.action {
             ResponseActionKind::TerminateProcess
+            | ResponseActionKind::TerminateProcessTree
             | ResponseActionKind::SuspendProcess
             | ResponseActionKind::ResumeProcess => {
                 let pid = request
@@ -1582,11 +2189,17 @@ impl ServiceState {
                 let path = PathBuf::from(&request.expected_path);
                 let action = match request.action {
                     ResponseActionKind::TerminateProcess => "terminate",
+                    ResponseActionKind::TerminateProcessTree => "terminate_tree",
                     ResponseActionKind::SuspendProcess => "suspend",
                     ResponseActionKind::ResumeProcess => "resume",
                     _ => unreachable!(),
                 };
-                let result = control_process(action, pid, &path).map_err(response_api_error)?;
+                let result = if request.action == ResponseActionKind::TerminateProcessTree {
+                    terminate_process_tree(pid, &path)
+                } else {
+                    control_process(action, pid, &path)
+                }
+                .map_err(response_api_error)?;
                 Ok((format!("PID {pid}"), result.detail, None, None))
             }
             ResponseActionKind::QuarantineFile => {
@@ -1618,13 +2231,24 @@ impl ServiceState {
                 ))
             }
             ResponseActionKind::BlockRemoteAddress => {
+                let pid = request.process_id.ok_or_else(|| {
+                    invalid_response("A process ID is required for an application-scoped block")
+                })?;
+                if request.expected_path.is_empty() {
+                    return Err(invalid_response(
+                        "An executable path is required for an application-scoped block",
+                    ));
+                }
                 let duration = request.duration_minutes.unwrap_or(15).clamp(1, 1_440);
                 let rollback_id = Uuid::new_v4().simple().to_string();
                 let rule_name = format!("OpenGuard Temporary Block {rollback_id}");
-                let program =
-                    (!request.expected_path.is_empty()).then(|| Path::new(&request.expected_path));
-                block_remote_address(&rule_name, &request.remote_address, program)
-                    .map_err(response_api_error)?;
+                block_remote_address(
+                    &rule_name,
+                    &request.remote_address,
+                    pid,
+                    Path::new(&request.expected_path),
+                )
+                .map_err(response_api_error)?;
                 let expires_seconds = unix_seconds().saturating_add(u64::from(duration) * 60);
                 let expires_at = format!("unix:{expires_seconds}");
                 let rollback = ResponseRollback {
@@ -1648,7 +2272,9 @@ impl ServiceState {
                 );
                 Ok((
                     request.remote_address.clone(),
-                    format!("Blocked outbound traffic for {duration} minutes"),
+                    format!(
+                        "Blocked outbound traffic from PID {pid} to this destination for {duration} minutes through Windows Firewall/WFP"
+                    ),
                     Some(rollback_id),
                     Some(expires_at),
                 ))
@@ -1775,7 +2401,11 @@ impl ServiceState {
         &mut self,
         owner_sid: &str,
     ) -> Result<openguard_domain::SystemSnapshot, openguard_windows::WindowsError> {
-        let mut snapshot = self.collector.snapshot()?;
+        let mut snapshot = self
+            .protection_monitor
+            .as_ref()
+            .and_then(ProtectionMonitor::snapshot)
+            .map_or_else(|| self.collector.snapshot(), Ok)?;
         self.record_snapshot_transitions(owner_sid, &snapshot);
         snapshot.coverage.push(self.file_monitors.get(owner_sid).map_or_else(
             || CoverageNote {
@@ -1887,10 +2517,33 @@ impl ServiceState {
     }
 
     fn apply_executable_baseline(
-        &self,
+        &mut self,
         owner_sid: &str,
         snapshot: &mut openguard_domain::SystemSnapshot,
     ) -> Result<bool, openguard_storage::StorageError> {
+        if let Some(baseline) = self.executable_baselines.get_mut(owner_sid) {
+            let persist_all = baseline.last_persisted.elapsed() >= Duration::from_mins(5);
+            let mut changed = Vec::new();
+            for process in &mut snapshot.processes {
+                process.is_new = !process.identity.is_empty()
+                    && baseline.identities.insert(process.identity.clone());
+                if process.is_new || persist_all {
+                    changed.push(SeenExecutable {
+                        identity: process.identity.clone(),
+                        path: process.path.clone(),
+                        name: process.name.clone(),
+                        signature: process.signature.to_string(),
+                        risk_score: process.risk.score,
+                        observed_at: unix_timestamp(),
+                    });
+                }
+            }
+            if !changed.is_empty() {
+                self.database.record_executables(owner_sid, &changed)?;
+                baseline.last_persisted = Instant::now();
+            }
+            return Ok(false);
+        }
         let baseline_key = format!("baseline_initialized:{owner_sid}");
         let initialized = self.database.get_metadata(&baseline_key)?.as_deref() == Some("1");
         let identities = snapshot
@@ -1923,6 +2576,16 @@ impl ServiceState {
         if !initialized {
             self.database.set_metadata(&baseline_key, "1")?;
         }
+        self.executable_baselines.insert(
+            owner_sid.into(),
+            ExecutableBaseline {
+                identities: observations
+                    .into_iter()
+                    .map(|observation| observation.identity)
+                    .collect(),
+                last_persisted: Instant::now(),
+            },
+        );
         Ok(!initialized)
     }
 
@@ -2234,7 +2897,11 @@ impl ServiceState {
                 message: format!("Commit security-content activation: {error}"),
                 retryable: true,
             })?;
-        self.scanner = Arc::new(scanner);
+        let scanner = Arc::new(scanner);
+        if let Some(monitor) = &self.protection_monitor {
+            monitor.update_content(Arc::clone(&scanner), reputation.clone());
+        }
+        self.scanner = scanner;
         self.collector.set_reputation_feed(reputation);
         self.content_version = version;
         self.content_source = "signed_update".into();
@@ -2283,7 +2950,11 @@ impl ServiceState {
                 message: format!("Commit security-content rollback: {error}"),
                 retryable: true,
             })?;
-        self.scanner = Arc::new(scanner);
+        let scanner = Arc::new(scanner);
+        if let Some(monitor) = &self.protection_monitor {
+            monitor.update_content(Arc::clone(&scanner), reputation.clone());
+        }
+        self.scanner = scanner;
         self.collector.set_reputation_feed(reputation);
         self.content_version = previous;
         self.content_source = "signed_update".into();
@@ -2292,14 +2963,7 @@ impl ServiceState {
 
     fn health(&self) -> ServiceHealth {
         let platform = platform_health();
-        ServiceHealth {
-            version: env!("CARGO_PKG_VERSION").into(),
-            protocol: PROTOCOL_VERSION,
-            service_state: self.mode.into(),
-            database_state: "ready".into(),
-            content_version: self.content_version.clone(),
-            uptime_seconds: self.started_at.elapsed().as_secs(),
-            coverage: vec![
+        let mut coverage = vec![
                 CoverageNote {
                     source: "windows".into(),
                     state: CoverageState::Active,
@@ -2347,7 +3011,41 @@ impl ServiceState {
                     state: CoverageState::Active,
                     detail: "Identity-revalidated process control, recoverable quarantine, reversible startup disable, and temporary outbound blocking require explicit user confirmation and are audited".into(),
                 },
-            ],
+                self.integrity_state.clone(),
+            ];
+        if let Some(snapshot) = self
+            .protection_monitor
+            .as_ref()
+            .and_then(ProtectionMonitor::snapshot)
+        {
+            for note in snapshot.coverage.into_iter().filter(|note| {
+                matches!(
+                    note.source.as_str(),
+                    "background_protection"
+                        | "windows_event_log"
+                        | "sysmon_events"
+                        | "behavior_chain"
+                        | "driverless_enforcement"
+                )
+            }) {
+                if let Some(existing) = coverage
+                    .iter_mut()
+                    .find(|existing| existing.source == note.source)
+                {
+                    *existing = note;
+                } else {
+                    coverage.push(note);
+                }
+            }
+        }
+        ServiceHealth {
+            version: env!("CARGO_PKG_VERSION").into(),
+            protocol: PROTOCOL_VERSION,
+            service_state: self.mode.into(),
+            database_state: "ready".into(),
+            content_version: self.content_version.clone(),
+            uptime_seconds: self.started_at.elapsed().as_secs(),
+            coverage,
         }
     }
 }
@@ -2516,6 +3214,7 @@ fn network_timeline_key(endpoint: &NetworkEndpoint) -> String {
 const fn response_action_name(action: ResponseActionKind) -> &'static str {
     match action {
         ResponseActionKind::TerminateProcess => "terminate_process",
+        ResponseActionKind::TerminateProcessTree => "terminate_process_tree",
         ResponseActionKind::SuspendProcess => "suspend_process",
         ResponseActionKind::ResumeProcess => "resume_process",
         ResponseActionKind::QuarantineFile => "quarantine_file",
@@ -2900,6 +3599,13 @@ mod tests {
             active_processes: HashMap::new(),
             active_network: HashMap::new(),
             snapshot_baselined: false,
+            protection_monitor: None,
+            integrity_state: CoverageNote {
+                source: "self_integrity".into(),
+                state: CoverageState::Active,
+                detail: "test baseline".into(),
+            },
+            executable_baselines: HashMap::new(),
         }
     }
 
@@ -2998,6 +3704,51 @@ mod tests {
             panic!("expected snapshot response")
         };
         assert!(!snapshot.processes.is_empty());
+    }
+
+    #[test]
+    fn background_protection_publishes_a_cached_live_snapshot() {
+        let directory = TempDir::new().expect("temporary directory");
+        let database = Database::open(directory.path().join("protection.db")).expect("database");
+        let scanner = Arc::new(FileScanner::new().expect("scanner"));
+        let shared = Arc::new(Mutex::new(None));
+        let thread_shared = Arc::clone(&shared);
+        let (sender, receiver) = channel();
+        let worker = thread::spawn(move || {
+            run_protection_loop(
+                &database,
+                scanner,
+                ReputationFeed::default(),
+                &thread_shared,
+                &receiver,
+            );
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "protection snapshot timed out");
+            thread::sleep(Duration::from_millis(25));
+        }
+        sender.send(ProtectionCommand::Stop).expect("stop monitor");
+        worker.join().expect("join monitor");
+        let snapshot = shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("cached snapshot");
+        assert!(!snapshot.processes.is_empty());
+        assert!(
+            snapshot
+                .coverage
+                .iter()
+                .any(|note| note.source == "background_protection")
+        );
     }
 
     #[test]
@@ -3213,7 +3964,7 @@ mod tests {
     #[test]
     fn executable_baseline_suppresses_first_inventory_and_marks_new_identity() {
         let directory = TempDir::new().expect("temporary directory");
-        let state = state(&directory);
+        let mut state = state(&directory);
         let mut first = openguard_domain::SystemSnapshot {
             processes: vec![openguard_domain::ProcessRecord {
                 identity: "existing|1".into(),

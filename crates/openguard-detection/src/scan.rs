@@ -1,3 +1,4 @@
+use crate::capabilities::inspect_capabilities;
 use openguard_domain::{ScanFinding, ScanVerdict, SignatureStatus};
 use sha2::{Digest, Sha256};
 use std::{
@@ -112,6 +113,7 @@ impl FileScanner {
     ///
     /// Returns an error for invalid targets, I/O failures, cancellation,
     /// oversized files or YARA-X execution failures.
+    #[allow(clippy::too_many_lines)]
     pub fn scan_file(
         &self,
         path: impl AsRef<Path>,
@@ -133,6 +135,7 @@ impl FileScanner {
         let mut score = 0_u16;
         let mut reasons = Vec::new();
         let mut yara_matches = Vec::new();
+        let mut capabilities = Vec::new();
 
         if let Some(name) = self.known_hashes.get(&hash.sha256) {
             score = 100;
@@ -189,13 +192,27 @@ impl FileScanner {
             SignatureStatus::NotApplicable
         };
 
-        if content.starts_with(b"MZ") {
+        let is_pe = content.starts_with(b"MZ");
+        let is_script =
+            SCRIPT_EXTENSIONS.contains(&extension.as_str()) || looks_like_script(&content);
+        if is_pe {
             let (pe_score, pe_reasons) = inspect_pe(&content, metadata.len());
             score = score.saturating_add(pe_score);
             reasons.extend(pe_reasons);
         }
+        if is_pe || is_script {
+            let capability_assessment = inspect_capabilities(&content);
+            score = score.saturating_add(capability_assessment.score);
+            for capability in &capability_assessment.capabilities {
+                reasons.push(format!(
+                    "Capability {} ({}, confidence {}%)",
+                    capability.category, capability.mitre_technique, capability.confidence
+                ));
+            }
+            capabilities = capability_assessment.capabilities;
+        }
 
-        if SCRIPT_EXTENSIONS.contains(&extension.as_str()) || looks_like_script(&content) {
+        if is_script {
             let (script_score, script_reasons) = inspect_script(&content);
             score = score.saturating_add(script_score);
             reasons.extend(script_reasons);
@@ -221,6 +238,7 @@ impl FileScanner {
             amsi_result: "not_scanned".into(),
             yara_status: "active".into(),
             yara_matches,
+            capabilities,
             scanned_at: timestamp(),
         })
     }

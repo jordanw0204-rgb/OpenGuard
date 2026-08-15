@@ -604,13 +604,117 @@
           }
         ],
         "updatedAt": "2026-08-08T09:31:14.293Z"
+      },
+      {
+        "id": "26",
+        "title": "OpenGuard 0.6 layered credential theft and RAT protection",
+        "description": "Deliver a professional, lightweight, low-noise endpoint protection release covering credential theft, keylogging, RAT behavior, process/memory abuse, browser vault access, pre-execution architecture, tamper resistance, response, evaluation, packaging, deployment, and public release.",
+        "details": "Use documented Windows interfaces and preserve the Rust service/C++ native/WinUI split. Keep kernel code minimal and never deploy unsigned or uncertified drivers. Prefer correlated multi-signal detections with explicit evidence, allowlists, bounded queues/caches/timeouts, owner scoping, signed updates, and reversible response.",
+        "testStrategy": "Unit and integration tests, clean-software negative corpus, deterministic behavioral fixtures, performance budgets, clippy/build gates, WinUI build, package verification, installed-service IPC smoke tests, live benign simulations, GitHub CI and tagged release.",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Architecture and threat model",
+            "description": "Map current collectors, detection, storage, IPC, UI, installer and update trust; document supported Windows interfaces, boundaries, performance budgets and false-positive policy.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 26,
+            "updatedAt": "2026-08-08T23:00:04.515Z",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Unified behavior graph",
+            "description": "Add durable process identities, normalized behavior events, correlation windows, evidence and incident scoring with bounded storage/caches.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 26,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T23:00:04.518Z"
+          },
+          {
+            "id": 3,
+            "title": "Credential Theft Shield",
+            "description": "Detect browser-vault access patterns, cookie/credential theft precursors, keylogging capability combinations and session-theft incidents with low-noise allowlisting.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 26,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T23:00:04.521Z"
+          },
+          {
+            "id": 4,
+            "title": "Memory, script and RAT analytics",
+            "description": "Add bounded memory/module inspection, injection indicators, AMSI/script correlation, screen/input/remote-control capabilities and beacon/RAT behavior.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 26,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T23:00:04.523Z"
+          },
+          {
+            "id": 5,
+            "title": "Network enforcement and response",
+            "description": "Correlate process destinations and beacons; strengthen reversible containment, process-tree response, device isolation and session-remediation guidance.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 26,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T23:00:04.526Z"
+          },
+          {
+            "id": 6,
+            "title": "Tamper resistance and minifilter gate",
+            "description": "Add self-integrity/config protections and a minimal documented minifilter architecture that cannot be packaged or loaded unless properly signed and explicitly enabled.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 26,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T23:00:04.528Z"
+          },
+          {
+            "id": 7,
+            "title": "Evaluation, release and deployment",
+            "description": "Add deterministic positive/negative fixtures, performance and false-positive budgets, full build/package/install/live tests, documentation, CI, tag and release.",
+            "details": "",
+            "status": "done",
+            "dependencies": [],
+            "parentTaskId": 26,
+            "parentId": "undefined",
+            "updatedAt": "2026-08-08T23:14:44.514Z"
+          }
+        ],
+        "updatedAt": "2026-08-08T23:14:44.514Z"
+      },
+      {
+        "id": "27",
+        "title": "OpenGuard 0.7 driverless EDR and optional Sysmon telemetry",
+        "description": "Keep OpenGuard driverless while adding optional Sysmon Event Log ingestion, expanded native Windows telemetry, user-mode WFP enforcement, explainable multi-event attack-chain correlation, explicit coverage UI, release hardening, deployment, and installed-runtime validation.",
+        "details": "Never install or reconfigure Sysmon silently; detect Windows optional/standalone Sysmon and consume its Operational channel when present. Preserve ETW/USN/ReadDirectoryChangesW fallbacks and deduplicate overlapping evidence. Use only built-in WFP block filters or Windows Firewall controls without a custom callout. Bound queues, parsing, histories, and correlation windows; persist evidence and expose source health. Keep the custom kernel minifilter disabled pending sponsorship, independent review, altitude, HLK, and Microsoft signing.",
+        "testStrategy": "Parser fixtures for supported Sysmon events and malformed XML, live Event Log capability smoke, WFP identity/revalidation tests, correlation positive/negative fixtures, bounded-queue/drop tests, Rust clippy and workspace tests, WinUI Release build, package verification, installed-service performance and UI responsiveness tests.",
+        "status": "in-progress",
+        "dependencies": [
+          "26"
+        ],
+        "priority": "high",
+        "subtasks": [],
+        "updatedAt": "2026-08-08T23:37:26.668Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-08-08T09:31:14.293Z",
-      "taskCount": 25,
-      "completedCount": 23,
+      "lastModified": "2026-08-08T23:37:26.669Z",
+      "taskCount": 27,
+      "completedCount": 24,
       "tags": [
         "master"
       ]

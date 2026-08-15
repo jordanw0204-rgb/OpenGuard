@@ -132,6 +132,34 @@
                             <StackPanel Grid.Column="1"><TextBlock Text="Content engine" FontWeight="SemiBold" /><TextBlock Text="YARA-X + AMSI" Style="{StaticResource MutedTextStyle}" /></StackPanel>
                             <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.ContentCoverageText, Mode=OneWay}" FontSize="10" Foreground="{StaticResource OpenGuardWarningBrush}" VerticalAlignment="Center" />
                         </Grid>
+                        <Rectangle Height="1" Fill="{StaticResource OpenGuardBorderBrush}" />
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE9D9;" FontSize="18" Foreground="{StaticResource OpenGuardAccentBrush}" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Windows event channels" FontWeight="SemiBold" /><TextBlock Text="Security audit + Defender" Style="{StaticResource MutedTextStyle}" /></StackPanel>
+                            <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.EventLogCoverageText, Mode=OneWay}" FontSize="10" Foreground="{StaticResource OpenGuardWarningBrush}" VerticalAlignment="Center" />
+                        </Grid>
+                        <Rectangle Height="1" Fill="{StaticResource OpenGuardBorderBrush}" />
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE9D2;" FontSize="18" Foreground="{StaticResource OpenGuardAccentBrush}" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Enhanced Sysmon" FontWeight="SemiBold" /><TextBlock Text="Optional existing channel" Style="{StaticResource MutedTextStyle}" /></StackPanel>
+                            <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.SysmonCoverageText, Mode=OneWay}" FontSize="10" Foreground="{StaticResource OpenGuardWarningBrush}" VerticalAlignment="Center" />
+                        </Grid>
+                        <Rectangle Height="1" Fill="{StaticResource OpenGuardBorderBrush}" />
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE945;" FontSize="18" Foreground="{StaticResource OpenGuardAccentBrush}" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Behavior chains" FontWeight="SemiBold" /><TextBlock Text="Bounded multi-signal rules" Style="{StaticResource MutedTextStyle}" /></StackPanel>
+                            <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.BehaviorCoverageText, Mode=OneWay}" FontSize="10" Foreground="{StaticResource OpenGuardWarningBrush}" VerticalAlignment="Center" />
+                        </Grid>
+                        <Rectangle Height="1" Fill="{StaticResource OpenGuardBorderBrush}" />
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE83D;" FontSize="18" Foreground="{StaticResource OpenGuardAccentBrush}" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Driverless isolation" FontWeight="SemiBold" /><TextBlock Text="Windows Firewall/WFP" Style="{StaticResource MutedTextStyle}" /></StackPanel>
+                            <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.EnforcementCoverageText, Mode=OneWay}" FontSize="10" Foreground="{StaticResource OpenGuardWarningBrush}" VerticalAlignment="Center" />
+                        </Grid>
                     </StackPanel>
                 </Border>
             </Grid>

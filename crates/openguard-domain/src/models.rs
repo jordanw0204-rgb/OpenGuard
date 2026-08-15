@@ -223,6 +223,7 @@ pub struct PersistenceInventory {
 #[serde(rename_all = "snake_case")]
 pub enum ResponseActionKind {
     TerminateProcess,
+    TerminateProcessTree,
     SuspendProcess,
     ResumeProcess,
     QuarantineFile,
@@ -259,6 +260,18 @@ pub struct ResponseActionResult {
     pub audit_event_id: i64,
 }
 
+/// A bounded, explainable capability inferred from static content. Capabilities
+/// are evidence, not a malware verdict: high-risk decisions require independent
+/// runtime or trust signals as well.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreatCapability {
+    pub category: String,
+    pub mitre_technique: String,
+    pub confidence: u8,
+    pub evidence: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScanFinding {
@@ -272,6 +285,8 @@ pub struct ScanFinding {
     pub amsi_result: String,
     pub yara_status: String,
     pub yara_matches: Vec<String>,
+    #[serde(default)]
+    pub capabilities: Vec<ThreatCapability>,
     pub scanned_at: String,
 }
 

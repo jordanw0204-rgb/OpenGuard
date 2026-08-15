@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -26,7 +26,9 @@ base64 = "0.23.1"
 clap = { version = "4.5.54", features = ["derive"] }
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["fast", "zeroize"] }
 hex = "0.4.3"
+goblin = { version = "0.10.7", default-features = false, features = ["std", "pe32", "pe64"] }
 notify = "8.2.0"
+quick-xml = { version = "0.41.0", features = ["serialize"] }
 openguard-domain = { path = "crates/openguard-domain" }
 openguard-detection = { path = "crates/openguard-detection" }
 openguard-ipc = { path = "crates/openguard-ipc" }

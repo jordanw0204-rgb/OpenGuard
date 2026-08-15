@@ -21,6 +21,11 @@
                     </Grid>
                     <Rectangle Height="1" Fill="{StaticResource OpenGuardBorderBrush}" />
                     <Grid>
+                        <StackPanel MaxWidth="760"><TextBlock Text="Enhanced Sysmon telemetry (optional)" FontWeight="SemiBold" /><TextBlock Text="OpenGuard uses an existing Sysmon Operational channel without installing Sysmon or changing its configuration. Current status appears under Overview coverage." Style="{StaticResource MutedTextStyle}" TextWrapping="Wrap" /></StackPanel>
+                        <TextBlock HorizontalAlignment="Right" Text="OPT-IN" FontSize="10" CharacterSpacing="100" Foreground="{StaticResource OpenGuardWarningBrush}" VerticalAlignment="Center" />
+                    </Grid>
+                    <Rectangle Height="1" Fill="{StaticResource OpenGuardBorderBrush}" />
+                    <Grid>
                         <StackPanel><TextBlock Text="AMSI second opinion" FontWeight="SemiBold" /><TextBlock Text="Ask the antimalware provider already installed on this PC." Style="{StaticResource MutedTextStyle}" /></StackPanel>
                         <ToggleSwitch HorizontalAlignment="Right" IsOn="True" IsEnabled="False" />
                     </Grid>

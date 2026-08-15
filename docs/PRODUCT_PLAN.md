@@ -41,6 +41,24 @@ It is not yet a replacement for Microsoft Defender or another mature endpoint su
 - Services, drivers, scheduled tasks, WMI consumer, Run/RunOnce, and browser-extension persistence inventory
 - Explicit, audited, identity-bound process control, detection-gated quarantine, temporary outbound blocking, and reversible safe startup response
 
+## Completed v0.6 layered credential-theft and RAT protection
+
+- Independent cached protection loop that runs without the UI and removes process/network collection from page refresh requests
+- Bounded PE/import and script capability analysis for browser credentials, keylogging, LSASS dumping, injection, capture, and remote control with MITRE evidence
+- Metadata-only private-executable/RWX memory-region inspection plus trust, destination, and repeated-flow correlation
+- Version-bound component integrity checks, schema v6 capability persistence, and signed-content hot reload in the background monitor
+- Explicit PID/path-revalidated process-tree containment and an Authenticode-gated optional AMSI provider
+- Fixed-width minifilter protocol plus a fail-closed altitude/review/signing build gate; no unsigned driver is packaged or loaded
+
+## Completed v0.7 driverless EDR expansion
+
+- Optional existing-Sysmon subscription with bounded XML parsing, finite queues, surfaced drops, and no silent installation/configuration
+- Native Security process-audit and Microsoft Defender Operational event subscriptions that work independently of Sysmon
+- Ten-minute, multi-signal behavior chains for credential access, process injection/tampering, executable drops, persistence, DNS, and outbound activity with MITRE evidence and cooldowns
+- Count-bounded detection/timeline retention and capped per-process correlation state for predictable always-on resource use
+- Live PID/path-revalidated application-plus-destination Windows Firewall/WFP isolation with explicit confirmation, expiry, audit, and rollback
+- UI coverage and Investigation filtering for Windows event channels, optional Sysmon, chain correlation, and driverless enforcement
+
 ## Current security architecture
 
 ```text
@@ -53,14 +71,15 @@ Win32 APIs   Local DB   AMSI consumer (optional)
    |
 Toolhelp + IP Helper + WinTrust + YARA-X
 
-Windows service -> native ETW process events + read-only WFP net events
+Windows service -> ETW + Security/Defender Event Log + optional Sysmon + WFP/net tables
+                -> confirmed application/destination Windows Firewall/WFP isolation
 ```
 
 ## Remaining release gates
 
-1. Obtain and protect a CA-issued Authenticode certificate; build public releases only through the signing workflow.
+1. Obtain and protect CA-issued application and driver signing credentials; build public releases only through the signing workflow.
 2. Independent security review, parser fuzzing, false-positive corpus, performance budgets, and update-key rotation drills.
 3. Curated community rule/reputation operations with reproducible provenance and review.
-4. Only if evidence proves necessary: independently audited, Microsoft-signed kernel components.
+4. Keep the custom driver disabled unless sponsorship funds a Microsoft-assigned minifilter altitude, independent kernel review, HLK/Verifier/fuzz validation, retail signing, and a measured coverage gap that user-mode Windows interfaces cannot address.
 
 The detailed requirements and acceptance criteria are maintained in `.taskmaster/docs/prd.txt`.

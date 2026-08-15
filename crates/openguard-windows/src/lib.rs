@@ -1,15 +1,21 @@
 #![cfg(windows)]
 
+mod eventlog;
 mod file_monitor;
+mod memory;
 mod persistence;
 mod response;
+mod sysmon;
 
+pub use eventlog::{NativeEventLogMonitor, WindowsEvent};
 pub use file_monitor::{FileActivity, FileMonitor, FileMonitorSnapshot, UsnCheckpoint};
+pub use memory::{MemoryInspection, inspect_process_memory};
 pub use persistence::{PersistenceContext, collect_persistence};
 pub use response::{
     ProcessControlResult, block_remote_address, control_process, remove_firewall_rule,
-    set_persistence_enabled,
+    set_persistence_enabled, terminate_process_tree,
 };
+pub use sysmon::{SysmonEvent, SysmonMonitor};
 
 use openguard_detection::{RiskEnvironment, assess_process};
 use openguard_domain::{

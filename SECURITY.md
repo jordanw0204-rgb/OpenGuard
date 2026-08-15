@@ -20,4 +20,4 @@ Update manifests use a pinned Ed25519 public key. Release maintainers keep the m
 
 ## Current security boundaries
 
-Version 0.4 uses a LocalSystem service for supported ETW, WFP, and TCP statistics access, but it cannot inspect protected process memory, decrypt TLS, or resist a local administrator/kernel attacker. ETW and WFP events improve timing and context; they are not packet capture. Behavior correlations combine local observations and remain explainable heuristics, not proof of compromise. Findings are evidence for investigation, not a guarantee of safety.
+Version 0.7 uses a LocalSystem service for supported ETW, Windows Event Log, optional existing-Sysmon, WFP, and TCP statistics access, but it cannot inspect protected process memory, decrypt TLS, or resist a local administrator/kernel attacker. These event sources improve timing and context; they are not packet capture. Behavior chains require multiple observations and remain explainable heuristics, not proof of compromise. Findings are evidence for investigation, not a guarantee of safety. OpenGuard never installs or reconfigures Sysmon automatically and ordinary builds contain no kernel driver.

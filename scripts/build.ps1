@@ -78,7 +78,7 @@ foreach ($document in @('README.md', 'LICENSE', 'SECURITY.md', 'CHANGELOG.md')) 
 foreach ($document in @('ARCHITECTURE.md', 'NATIVE_ARCHITECTURE.md', 'PRODUCT_PLAN.md')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "docs\$document") -Destination $docsDirectory
 }
-foreach ($script in @('deploy-local.ps1', 'verify-release.ps1')) {
+foreach ($script in @('deploy-local.ps1', 'verify-release.ps1', 'measure-performance.ps1')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "scripts\$script") -Destination $scriptsDirectory
 }
 

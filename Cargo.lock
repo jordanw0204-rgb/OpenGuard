@@ -858,6 +858,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "goblin"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17582616a7718cca54cec18e534a76c7c4aec11a8b9a85695712f262fd15a4c8"
+dependencies = [
+ "log",
+ "plain",
+ "scroll",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1386,7 +1397,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openguard-cli"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1400,8 +1411,9 @@ dependencies = [
 
 [[package]]
 name = "openguard-detection"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
+ "goblin",
  "hex",
  "openguard-domain",
  "sha2 0.10.9",
@@ -1412,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "openguard-domain"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1420,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "openguard-ipc"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "openguard-domain",
  "serde",
@@ -1430,7 +1442,7 @@ dependencies = [
 
 [[package]]
 name = "openguard-scanner"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1440,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "openguard-service"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1463,7 +1475,7 @@ dependencies = [
 
 [[package]]
 name = "openguard-storage"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "openguard-domain",
  "rusqlite",
@@ -1474,7 +1486,7 @@ dependencies = [
 
 [[package]]
 name = "openguard-updates"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",
@@ -1492,12 +1504,13 @@ dependencies = [
 
 [[package]]
 name = "openguard-windows"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "hex",
  "notify",
  "openguard-detection",
  "openguard-domain",
+ "quick-xml",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1524,6 +1537,12 @@ name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+
+[[package]]
+name = "plain"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "postcard"
@@ -1596,6 +1615,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+dependencies = [
+ "memchr",
+ "serde",
 ]
 
 [[package]]
@@ -1783,6 +1812,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "scroll"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1257cd4248b4132760d6524d6dda4e053bc648c9070b960929bf50cfb1e7add"
+dependencies = [
+ "scroll_derive",
+]
+
+[[package]]
+name = "scroll_derive"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed76efe62313ab6610570951494bdaa81568026e0318eaa55f167de70eeea67d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
